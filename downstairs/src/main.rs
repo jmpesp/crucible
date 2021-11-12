@@ -242,6 +242,8 @@ fn downstairs_import<P: AsRef<Path> + std::fmt::Debug>(
     const CHUNK_SIZE: usize = 32 * 1024 * 1024;
     assert_eq!(CHUNK_SIZE % MAX_BLOCK_SIZE, 0);
 
+    let mut shuffle_context = ShuffleContext::noop();
+
     let mut offset = Block::new_with_ddef(0, &region.def());
     loop {
         let mut buffer = vec![0; CHUNK_SIZE];
@@ -291,9 +293,13 @@ fn downstairs_import<P: AsRef<Path> + std::fmt::Debug>(
          */
         let nblocks = Block::from_bytes(total, &rm);
         let mut pos = Block::from_bytes(0, &rm);
-        for (eid, offset, len) in
-            extent_from_offset(rm, offset, nblocks, false)?
-        {
+        for (eid, offset, len) in extent_from_offset(
+            rm,
+            offset,
+            nblocks,
+            false,
+            &mut shuffle_context,
+        )? {
             let data = &buffer[pos.bytes()..(pos.bytes() + len.bytes())];
             let mut buffer = BytesMut::with_capacity(data.len());
             buffer.resize(data.len(), 0);

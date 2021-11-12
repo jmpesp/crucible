@@ -26,7 +26,8 @@ mod test {
                 ddef,
                 Block::new_512(0),
                 Block::new_512(1),
-                false
+                false,
+                &mut ShuffleContext::noop(),
             )
             .unwrap(),
             vec![extent_tuple(0, 0, 1)],
@@ -38,7 +39,8 @@ mod test {
                 ddef,
                 Block::new_512(0),
                 Block::new_512(2),
-                false
+                false,
+                &mut ShuffleContext::noop(),
             )
             .unwrap(),
             vec![extent_tuple(0, 0, 2)],
@@ -50,7 +52,8 @@ mod test {
                 ddef,
                 Block::new_512(0),
                 Block::new_512(4),
-                false
+                false,
+                &mut ShuffleContext::noop(),
             )
             .unwrap(),
             vec![extent_tuple(0, 0, 2), extent_tuple(1, 0, 2)],
@@ -62,7 +65,8 @@ mod test {
                 ddef,
                 Block::new_512(1),
                 Block::new_512(4),
-                false
+                false,
+                &mut ShuffleContext::noop(),
             )
             .unwrap(),
             vec![
@@ -77,7 +81,8 @@ mod test {
                 ddef,
                 Block::new_512(2),
                 Block::new_512(4),
-                false
+                false,
+                &mut ShuffleContext::noop(),
             )
             .unwrap(),
             vec![extent_tuple(1, 0, 2), extent_tuple(2, 0, 2)],
@@ -88,7 +93,8 @@ mod test {
                 ddef,
                 Block::new_512(2),
                 Block::new_512(16),
-                false
+                false,
+                &mut ShuffleContext::noop(),
             )
             .unwrap(),
             vec![
@@ -117,6 +123,7 @@ mod test {
                 Block::new_512(2), // offset
                 Block::new_512(1), // num_blocks
                 true,
+                &mut ShuffleContext::noop(),
             )
             .unwrap(),
             vec![extent_tuple(1, 0, 1),]
@@ -128,6 +135,7 @@ mod test {
                 Block::new_512(2), // offset
                 Block::new_512(2), // num_blocks
                 true,
+                &mut ShuffleContext::noop(),
             )
             .unwrap(),
             vec![extent_tuple(1, 0, 1), extent_tuple(1, 1, 1),]
@@ -139,6 +147,7 @@ mod test {
                 Block::new_512(2), // offset
                 Block::new_512(3), // num_blocks
                 true,
+                &mut ShuffleContext::noop(),
             )
             .unwrap(),
             vec![
@@ -154,6 +163,7 @@ mod test {
                 Block::new_512(2), // offset
                 Block::new_512(3), // num_blocks
                 false,             // not single block only
+                &mut ShuffleContext::noop(),
             )
             .unwrap(),
             vec![
@@ -255,7 +265,13 @@ mod test {
     ) -> Result<Vec<(u64, Block, Block)>> {
         let ddef = up.ddef.lock().unwrap();
         let num_blocks = Block::new_with_ddef(num_blocks, &ddef);
-        extent_from_offset(*ddef, offset, num_blocks, false)
+        extent_from_offset(
+            *ddef,
+            offset,
+            num_blocks,
+            false,
+            &mut ShuffleContext::noop(),
+        )
     }
 
     #[test]

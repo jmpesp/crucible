@@ -153,8 +153,12 @@ impl RegionDefinition {
         self.extent_count = ec;
     }
 
+    pub fn num_blocks(&self) -> u64 {
+        self.extent_size.value * (self.extent_count as u64)
+    }
+
     pub fn total_size(&self) -> u64 {
-        self.block_size * self.extent_size.value * (self.extent_count as u64)
+        self.block_size * self.num_blocks()
     }
 
     pub fn uuid(&self) -> Uuid {

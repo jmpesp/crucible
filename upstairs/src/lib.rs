@@ -140,6 +140,7 @@ pub fn extent_from_offset(
     offset: Block,
     num_blocks: Block,
     single_blocks_only: bool,
+    shuffle_context: &mut ShuffleContext,
 ) -> Result<Vec<(u64, Block, Block)>> {
     assert!(num_blocks.value > 0);
     assert!(
@@ -168,10 +169,11 @@ pub fn extent_from_offset(
          * will need to write more code. But - that code may live
          * upstairs?
          */
-        let eid: u64 = o / ddef.extent_size().value;
+        let eid: u64 = shuffle_context.index(o) / ddef.extent_size().value;
         assert!((eid as u32) < ddef.extent_count());
 
-        let extent_offset: u64 = o % ddef.extent_size().value;
+        let extent_offset: u64 =
+            shuffle_context.index(o) % ddef.extent_size().value;
         let sz: u64 = if single_blocks_only {
             1
         } else {
@@ -1918,6 +1920,96 @@ impl EncryptionContext {
 }
 
 #[derive(Debug)]
+pub struct ShuffleContext {
+    noop: bool,
+    phf: Option<boomphf::Mphf<usize>>,
+}
+
+impl ShuffleContext {
+    pub fn new(key: &[u8; 32], num_blocks: usize) -> ShuffleContext {
+        let mut rng = ChaCha20Rng::from_seed(*key);
+        let mut block_index: Vec<usize> = (0..num_blocks).collect();
+        block_index.shuffle(&mut rng);
+
+        let phf = boomphf::Mphf::new(1.7, &block_index);
+
+        ShuffleContext {
+            noop: false,
+            phf: Some(phf),
+        }
+    }
+
+    pub fn reinit(&mut self, key: &[u8; 32], num_blocks: usize) {
+        let mut rng = ChaCha20Rng::from_seed(*key);
+        let mut block_index: Vec<usize> = (0..num_blocks).collect();
+        block_index.shuffle(&mut rng);
+
+        self.noop = false;
+        self.phf = Some(boomphf::Mphf::new(1.7, &block_index));
+    }
+
+    pub fn noop() -> ShuffleContext {
+        ShuffleContext {
+            noop: true,
+            phf: None,
+        }
+    }
+
+    pub fn index(&mut self, block: u64) -> u64 {
+        if self.noop {
+            block
+        } else {
+            self.phf.as_ref().unwrap().hash(&(block as usize))
+        }
+    }
+}
+
+// Uncomment for comparison to boomphf
+/*
+#[derive(Debug)]
+pub struct ShuffleContext {
+    noop: bool,
+    block_index: Vec<usize>,
+}
+
+impl ShuffleContext {
+    pub fn new(key: &[u8; 32], num_blocks: usize) -> ShuffleContext {
+        let mut rng = ChaCha20Rng::from_seed(*key);
+        let mut block_index: Vec<usize> = (0..num_blocks).collect();
+        block_index.shuffle(&mut rng);
+
+        ShuffleContext {
+            noop: false,
+            block_index,
+        }
+    }
+
+    pub fn reinit(&mut self, key: &[u8; 32], num_blocks: usize) {
+        let mut rng = ChaCha20Rng::from_seed(*key);
+        self.block_index = (0..num_blocks).collect();
+        self.block_index.shuffle(&mut rng);
+
+        self.noop = false;
+    }
+
+    pub fn noop() -> ShuffleContext {
+        ShuffleContext {
+            noop: true,
+            block_index: vec![],
+        }
+    }
+
+    pub fn index(&self, block: u64) -> u64 {
+        if self.noop {
+            block
+        } else {
+            self.block_index[block as usize] as u64
+        }
+    }
+}
+*/
+
+#[derive(Debug)]
 struct Active {
     active: bool,
     active_request: bool,
@@ -1931,6 +2023,7 @@ impl Active {
         }
     }
 }
+
 /*
  * XXX Track scheduled storage work in the central structure. Have the
  * target management task check for work to do here by changing the value in
@@ -2001,6 +2094,7 @@ pub struct Upstairs {
      * the CrucibleOpts
      */
     encryption_context: Option<Arc<EncryptionContext>>,
+    shuffle_context: Mutex<ShuffleContext>,
 
     /*
      * Upstairs keeps all IOs in memory until a flush is ACK'd back from
@@ -2056,6 +2150,8 @@ impl Upstairs {
             ))
         });
 
+        let shuffle_context = Mutex::new(ShuffleContext::noop());
+
         Arc::new(Upstairs {
             active: Mutex::new(Active::default()),
             uuid: Uuid::new_v4(),      // XXX get from Nexus?
@@ -2065,6 +2161,7 @@ impl Upstairs {
             flush_info: Mutex::new(FlushInfo::new()),
             ddef: Mutex::new(def),
             encryption_context,
+            shuffle_context,
             need_flush: Mutex::new(false),
         })
     }
@@ -2270,6 +2367,7 @@ impl Upstairs {
             offset,
             Block::from_bytes(data.len(), &ddef),
             self.encryption_context.is_some(),
+            &mut self.shuffle_context.lock().unwrap(),
         )?;
 
         /*
@@ -2384,6 +2482,7 @@ impl Upstairs {
             offset,
             Block::from_bytes(data.len(), &ddef),
             self.encryption_context.is_some(),
+            &mut self.shuffle_context.lock().unwrap(),
         )?;
 
         /*
@@ -2735,6 +2834,16 @@ impl Upstairs {
             ddef.set_extent_size(client_ddef.extent_size());
             ddef.set_extent_count(client_ddef.extent_count());
             println!("Setting expected region info to: {:?}", client_ddef);
+
+            let mut rng = ChaCha20Rng::from_entropy();
+            let mut key = [0u8; 32];
+            rng.fill_bytes(&mut key);
+            assert_eq!(key.len(), 32);
+
+            let mut shuffle_context = self.shuffle_context.lock().unwrap();
+            shuffle_context.reinit(&key, ddef.num_blocks() as usize);
+
+            println!("Initialized shuffle context with {:x?}", key);
         }
 
         if ddef.block_size() != client_ddef.block_size()
