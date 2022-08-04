@@ -107,6 +107,12 @@ pub enum CrucibleError {
 
     #[error("Generation number is too low: {0}")]
     GenerationNumberTooLow(String),
+
+    #[error("Negotiation error: {0}")]
+    NegotiationError(String),
+
+    #[error("Negotation mismatch: {0}")]
+    NegotiationMismatch(String),
 }
 
 impl From<std::io::Error> for CrucibleError {
