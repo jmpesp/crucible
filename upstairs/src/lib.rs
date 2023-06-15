@@ -40,7 +40,6 @@ use aes_gcm_siv::{Aes256GcmSiv, Key, KeyInit, Nonce, Tag};
 use rand_chacha::ChaCha20Rng;
 
 pub mod control;
-mod dummy_downstairs_tests;
 mod pseudo_file;
 mod test;
 
@@ -73,11 +72,11 @@ use async_trait::async_trait;
 
 // Max number of outstanding IOs between the upstairs and the downstairs
 // before we give up and mark that downstairs faulted.
-const IO_OUTSTANDING_MAX: usize = 1000;
+pub const IO_OUTSTANDING_MAX: usize = 1000;
 
 // Max number of submitted IOs between the upstairs and the downstairs, above
 // which flow control kicks in.
-const MAX_ACTIVE_COUNT: usize = 100;
+pub const MAX_ACTIVE_COUNT: usize = 100;
 
 /// The BlockIO trait behaves like a physical NVMe disk (or a virtio virtual
 /// disk): there is no contract about what order operations that are submitted

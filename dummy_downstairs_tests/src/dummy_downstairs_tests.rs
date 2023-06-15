@@ -7,18 +7,19 @@ pub(crate) mod protocol_test {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::test::up_test::csl;
-    use crate::up_main;
-    use crate::BlockContext;
-    use crate::BlockIO;
-    use crate::Buffer;
-    use crate::Guest;
-    use crate::IO_OUTSTANDING_MAX;
-    use crate::MAX_ACTIVE_COUNT;
+    use crucible::up_main;
+    use crucible_protocol::BlockContext;
+    use crucible::BlockIO;
+    use crucible::Buffer;
+    use crucible::Guest;
+    use crucible::IO_OUTSTANDING_MAX;
+    use crucible::MAX_ACTIVE_COUNT;
+    use crucible::deadline_secs;
     use crucible_client_types::CrucibleOpts;
     use crucible_common::Block;
     use crucible_common::RegionDefinition;
     use crucible_common::RegionOptions;
+    use crucible_common::build_logger;
     use crucible_protocol::CrucibleDecoder;
     use crucible_protocol::CrucibleEncoder;
     use crucible_protocol::Message;
@@ -27,6 +28,8 @@ pub(crate) mod protocol_test {
     use bytes::BytesMut;
     use futures::SinkExt;
     use futures::StreamExt;
+    use rand::random;
+    use rand::prelude::*;
     use slog::error;
     use slog::info;
     use slog::o;
@@ -37,6 +40,7 @@ pub(crate) mod protocol_test {
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::Mutex;
     use tokio::task::JoinHandle;
+    use tokio::time::sleep_until;
     use tokio_util::codec::FramedRead;
     use tokio_util::codec::FramedWrite;
     use uuid::Uuid;
@@ -385,8 +389,14 @@ pub(crate) mod protocol_test {
     }
 
     impl TestHarness {
-        pub async fn new() -> TestHarness {
-            let log = csl();
+        pub async fn new(test_name: &'static str) -> TestHarness {
+            let default_panic = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                default_panic(info);
+                std::process::exit(1);
+            }));
+
+            let log = build_logger();
 
             let ds1 = Downstairs::new(log.new(o!("downstairs" => 1))).await;
             let ds2 = Downstairs::new(log.new(o!("downstairs" => 2))).await;
@@ -408,7 +418,7 @@ pub(crate) mod protocol_test {
                 None,
                 guest.clone(),
                 None,
-                Some(log.new(o!("upstairs" => 1))),
+                Some(log.new(o!(test_name => "upstairs"))),
             )
             .await
             .unwrap();
@@ -512,7 +522,7 @@ pub(crate) mod protocol_test {
     /// work is sent.
     #[tokio::test]
     async fn test_flow_control() {
-        let harness = Arc::new(TestHarness::new().await);
+        let harness = Arc::new(TestHarness::new("test_flow_control").await);
 
         let (_jh1, mut ds1_messages) =
             harness.ds1().await.spawn_message_receiver().await;
@@ -688,7 +698,7 @@ pub(crate) mod protocol_test {
     /// Test that replay occurs after a downstairs disconnects and reconnects
     #[tokio::test]
     async fn test_replay_occurs() {
-        let harness = Arc::new(TestHarness::new().await);
+        let harness = Arc::new(TestHarness::new("test_replay_occurs").await);
 
         let (jh1, mut ds1_messages) =
             harness.ds1().await.spawn_message_receiver().await;
@@ -759,9 +769,8 @@ pub(crate) mod protocol_test {
     /// letting it reconnect, live repair occurs. Check that each extent is
     /// repaired with the correct source, and that extent limits are honoured if
     /// additional IO comes through.
-    #[tokio::test]
     async fn test_successful_live_repair() {
-        let harness = Arc::new(TestHarness::new().await);
+        let harness = Arc::new(TestHarness::new("test_successful_live_repair").await);
 
         let (jh1, mut ds1_messages) =
             harness.ds1().await.spawn_message_receiver().await;
@@ -1772,5 +1781,45 @@ pub(crate) mod protocol_test {
                 Message::ReadRequest { .. },
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn test_successful_live_repair_1() {
+        test_successful_live_repair().await
+    }
+
+    #[tokio::test]
+    async fn test_successful_live_repair_2() {
+        test_successful_live_repair().await
+    }
+
+    #[tokio::test]
+    async fn test_successful_live_repair_3() {
+        test_successful_live_repair().await
+    }
+
+    #[tokio::test]
+    async fn test_successful_live_repair_4() {
+        test_successful_live_repair().await
+    }
+
+    #[tokio::test]
+    async fn test_successful_live_repair_5() {
+        test_successful_live_repair().await
+    }
+
+    #[tokio::test]
+    async fn test_successful_live_repair_6() {
+        test_successful_live_repair().await
+    }
+
+    #[tokio::test]
+    async fn test_successful_live_repair_7() {
+        test_successful_live_repair().await
+    }
+
+    #[tokio::test]
+    async fn test_successful_live_repair_8() {
+        test_successful_live_repair().await
     }
 }

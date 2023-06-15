@@ -11,6 +11,7 @@ members = [
     "downstairs",
     "dsc",
     "dsc-client",
+    "dummy_downstairs_tests",
     "hammer",
     "integration_tests",
     "measure_iops",
