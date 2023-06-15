@@ -1,0 +1,59 @@
+[package]
+name = "dummy-downstairs-tests"
+version = "0.0.1"
+authors = ["James MacMahon <james@oxide.computer>"]
+license = "MPL-2.0"
+edition = "2021"
+
+[lib]
+path = "src/dummy_downstairs_tests.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+async-recursion.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+crucible.workspace = true
+crucible-common.workspace = true
+crucible-client-types.workspace = true
+crucible-protocol.workspace = true
+dropshot.workspace = true
+futures.workspace = true
+futures-core.workspace = true
+itertools.workspace = true
+omicron-common.workspace = true
+oximeter-producer.workspace = true
+oximeter.workspace = true
+rand.workspace = true
+ringbuffer.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+slog.workspace = true
+slog-async.workspace = true
+slog-dtrace.workspace = true
+slog-term.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-rustls.workspace = true
+toml.workspace = true
+tracing.workspace = true
+usdt.workspace = true
+uuid.workspace = true
+aes-gcm-siv.workspace = true
+rand_chacha.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+expectorate.workspace = true
+openapiv3.workspace = true
+openapi-lint.workspace = true
+tokio-test.workspace = true
+tempfile.workspace = true
+test-strategy.workspace = true
+proptest.workspace = true
+
+[build-dependencies]
+version_check = "0.9.4"
