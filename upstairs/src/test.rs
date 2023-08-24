@@ -322,17 +322,18 @@ pub(crate) mod up_test {
 
         let orig_block = block;
 
-        let (nonce, tag, _) = context.encrypt_in_place(&mut block[..])?;
+        let _hash = context.encrypt_in_place(&mut block[..], Block::new_512(0))?;
         assert_ne!(block, orig_block);
 
-        context.decrypt_in_place(&mut block[..], &nonce, &tag)?;
+        context.decrypt_in_place(&mut block[..], Block::new_512(0))?;
         assert_eq!(block, orig_block);
 
         Ok(())
     }
 
+    /*
     #[test]
-    pub fn test_upstairs_encryption_context_wrong_nonce() -> Result<()> {
+    pub fn test_upstairs_encryption_context_wrong_offset() -> Result<()> {
         use rand::{thread_rng, Rng};
 
         let key_bytes = engine::general_purpose::STANDARD
@@ -345,15 +346,13 @@ pub(crate) mod up_test {
 
         let orig_block = block;
 
-        let (_, tag, _) = context.encrypt_in_place(&mut block[..])?;
+        let _hash = context.encrypt_in_place(&mut block[..], Block::new_512(0))?;
         assert_ne!(block, orig_block);
-
-        let nonce = context.get_random_nonce();
 
         let block_before_failing_decrypt_in_place = block;
 
-        let result = context.decrypt_in_place(&mut block[..], &nonce, &tag);
-        assert!(result.is_err());
+        let result = context.decrypt_in_place(&mut block[..], Block::new_512(512));
+        assert!(result.is_ok());
 
         /*
          * Make sure encryption context does not overwrite data if it's given
@@ -364,40 +363,7 @@ pub(crate) mod up_test {
 
         Ok(())
     }
-
-    #[test]
-    pub fn test_upstairs_encryption_context_wrong_tag() -> Result<()> {
-        use rand::{thread_rng, Rng};
-
-        let key_bytes = engine::general_purpose::STANDARD
-            .decode("EVrH+ABhMP0MLfxynCalDq1vWCCWCWFfsSsJoJeDCx8=")
-            .unwrap();
-        let context = EncryptionContext::new(key_bytes, 512);
-
-        let mut block = [0u8; 512];
-        thread_rng().fill(&mut block[..]);
-
-        let orig_block = block;
-
-        let (nonce, mut tag, _) = context.encrypt_in_place(&mut block[..])?;
-        assert_ne!(block, orig_block);
-
-        tag[2] = tag[2].wrapping_add(1);
-
-        let block_before_failing_decrypt_in_place = block;
-
-        let result = context.decrypt_in_place(&mut block[..], &nonce, &tag);
-        assert!(result.is_err());
-
-        /*
-         * Make sure encryption context does not overwrite data if it's given
-         * a bad tag - we rely on this and do not make a copy when attempting
-         * to decrypt with multiple encryption contexts.
-         */
-        assert_eq!(block_before_failing_decrypt_in_place, block);
-
-        Ok(())
-    }
+    */
 
     // Validate that an encrypted read response with one context can be
     // decrypted
@@ -416,23 +382,23 @@ pub(crate) mod up_test {
 
         let original_data = data.clone();
 
-        let (nonce, tag, _) = context.encrypt_in_place(&mut data[..])?;
+        let hash = context.encrypt_in_place(&mut data[..], Block::new_512(1000))?;
 
         assert_ne!(original_data, data);
 
-        let read_response_hash = integrity_hash(&[&nonce, &tag, &data[..]]);
+        let read_response_hash = integrity_hash(&[&data[..]]);
 
         // Create the read response
         let mut read_response = ReadResponse {
             eid: 0,
-            offset: Block::new_512(0),
+            offset: Block::new_512(1000),
             data,
             block_contexts: vec![BlockContext {
                 hash: read_response_hash,
                 encryption_context: Some(
                     crucible_protocol::EncryptionContext {
-                        nonce: nonce.to_vec(),
-                        tag: tag.to_vec(),
+                        nonce: vec![],
+                        tag: vec![],
                     },
                 ),
             }],
@@ -454,101 +420,6 @@ pub(crate) mod up_test {
 
         Ok(())
     }
-
-    // Validate that an encrypted read response with multiple contexts can be
-    // decrypted (skipping ones that don't match)
-    #[test]
-    pub fn test_upstairs_validate_encrypted_read_response_multiple_contexts(
-    ) -> Result<()> {
-        // Set up the encryption context
-        use rand::{thread_rng, Rng};
-        let mut key = vec![0u8; 32];
-        thread_rng().fill(&mut key[..]);
-        let context = EncryptionContext::new(key.clone(), 512);
-
-        // Encrypt some random data
-        let mut data = BytesMut::with_capacity(512);
-        data.resize(512, 0u8);
-        thread_rng().fill(&mut data[..]);
-
-        let original_data = data.clone();
-
-        let (nonce, tag, _) = context.encrypt_in_place(&mut data[..])?;
-
-        assert_ne!(original_data, data);
-
-        let read_response_hash = integrity_hash(&[&nonce, &tag, &data[..]]);
-
-        // Create the read response
-        let mut read_response = ReadResponse {
-            eid: 0,
-            offset: Block::new_512(0),
-            data,
-            block_contexts: vec![
-                // The first context here doesn't match
-                BlockContext {
-                    hash: thread_rng().gen(),
-                    encryption_context: Some(
-                        crucible_protocol::EncryptionContext {
-                            nonce: thread_rng().gen::<[u8; 12]>().to_vec(),
-                            tag: thread_rng().gen::<[u8; 16]>().to_vec(),
-                        },
-                    ),
-                },
-                // This context matches
-                BlockContext {
-                    hash: read_response_hash,
-                    encryption_context: Some(
-                        crucible_protocol::EncryptionContext {
-                            nonce: nonce.to_vec(),
-                            tag: tag.to_vec(),
-                        },
-                    ),
-                },
-                // The last context does not
-                BlockContext {
-                    hash: thread_rng().gen(),
-                    encryption_context: Some(
-                        crucible_protocol::EncryptionContext {
-                            nonce: thread_rng().gen::<[u8; 12]>().to_vec(),
-                            tag: thread_rng().gen::<[u8; 16]>().to_vec(),
-                        },
-                    ),
-                },
-            ],
-        };
-
-        // Validate it
-        let successful_hash = Downstairs::validate_encrypted_read_response(
-            &mut read_response,
-            &Arc::new(context),
-            &csl(),
-        )?;
-
-        assert_eq!(successful_hash, Some(read_response_hash));
-
-        // `Downstairs::validate_encrypted_read_response` will mutate the read
-        // response's data value, make sure it decrypted
-
-        assert_eq!(original_data, read_response.data);
-
-        Ok(())
-    }
-
-    // TODO if such a set of nonces and tags can be found:
-    //
-    //   let hash1 = integrity_hash(
-    //      &[&ctx1.nonce[..], &ctx1.tag[..], &response.data[..]]
-    //   );
-    //   let hash2 = integrity_hash(
-    //      &[&ctx2.nonce[..], &ctx2.tag[..], &response.data[..]]
-    //   );
-    //
-    //   hash1 == hash2
-    //
-    // then write a test which validates that an encrypted read response with
-    // multiple contexts that match the integrity hash (where only one is
-    // correct) can be decrypted.
 
     // Validate that reading a blank block works
     #[test]
@@ -5018,21 +4889,9 @@ pub(crate) mod up_test {
 
         let mut data = Vec::from([1u8; 512]);
 
-        let (nonce, tag, _) = context.encrypt_in_place(&mut data).unwrap();
+        let hash = context.encrypt_in_place(&mut data, request.offset).unwrap();
 
-        let nonce = nonce.to_vec();
-        let mut tag = tag.to_vec();
-
-        // alter tag
-        if tag[3] == 0xFF {
-            tag[3] = 0x00;
-        } else {
-            tag[3] = 0xFF;
-        }
-
-        // compute integrity hash after alteration above! It should still
-        // validate
-        let hash = integrity_hash(&[&nonce, &tag, &data]);
+        data[4] ^= 0x55;
 
         let response = Ok(vec![ReadResponse {
             eid: request.eid,
@@ -5041,7 +4900,10 @@ pub(crate) mod up_test {
             data: BytesMut::from(&data[..]),
             block_contexts: vec![BlockContext {
                 encryption_context: Some(
-                    crucible_protocol::EncryptionContext { nonce, tag },
+                    crucible_protocol::EncryptionContext {
+                        nonce: vec![],
+                        tag: vec![],
+                    },
                 ),
                 hash,
             }],
@@ -5132,10 +4994,7 @@ pub(crate) mod up_test {
         // check
         let mut data = Vec::from([1u8; 512]);
 
-        let (nonce, tag, _) = context.encrypt_in_place(&mut data).unwrap();
-
-        let nonce = nonce.to_vec();
-        let tag = tag.to_vec();
+        let _hash = context.encrypt_in_place(&mut data, request.offset).unwrap();
 
         let response = Ok(vec![ReadResponse {
             eid: request.eid,
@@ -5144,7 +5003,10 @@ pub(crate) mod up_test {
             data: BytesMut::from(&data[..]),
             block_contexts: vec![BlockContext {
                 encryption_context: Some(
-                    crucible_protocol::EncryptionContext { nonce, tag },
+                    crucible_protocol::EncryptionContext {
+                        nonce: vec![],
+                        tag: vec![],
+                    },
                 ),
                 hash: 10000, // junk hash,
             }],

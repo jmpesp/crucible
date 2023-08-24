@@ -49,6 +49,8 @@ uuid.workspace = true
 aes-gcm-siv.workspace = true
 rand_chacha.workspace = true
 reqwest.workspace = true
+xts-mode.workspace=  true
+aes.workspace = true
 
 [dev-dependencies]
 expectorate.workspace = true

@@ -35,8 +35,8 @@ use tracing::{instrument, span, Level};
 use usdt::register_probes;
 use uuid::Uuid;
 
-use aes_gcm_siv::aead::AeadInPlace;
-use aes_gcm_siv::{Aes256GcmSiv, Key, KeyInit, Nonce, Tag};
+use aes::{Aes128, cipher::KeyInit, cipher::generic_array::GenericArray};
+use xts_mode::{Xts128, get_tweak_default};
 
 pub mod control;
 mod dummy_downstairs_tests;
@@ -3967,8 +3967,6 @@ impl Downstairs {
 
             // Validate integrity hash before decryption
             let computed_hash = integrity_hash(&[
-                &block_encryption_ctx.nonce[..],
-                &block_encryption_ctx.tag[..],
                 &response.data[..],
             ]);
 
@@ -3984,8 +3982,7 @@ impl Downstairs {
                 // unit test to validate this behaviour.
                 let decryption_result = encryption_context.decrypt_in_place(
                     &mut response.data[..],
-                    Nonce::from_slice(&block_encryption_ctx.nonce[..]),
-                    Tag::from_slice(&block_encryption_ctx.tag[..]),
+                    response.offset,
                 );
 
                 if decryption_result.is_ok() {
@@ -4824,9 +4821,9 @@ pub struct ExtentRepairIDs {
     reopen_id: u64,
 }
 
-/// Implement AES-GCM-SIV encryption
+/// Implement AES-XTS encryption
 pub struct EncryptionContext {
-    cipher: Aes256GcmSiv,
+    cipher: Xts128::<Aes128>,
     block_size: usize,
 }
 
@@ -4841,8 +4838,9 @@ impl Debug for EncryptionContext {
 impl EncryptionContext {
     pub fn new(key: Vec<u8>, block_size: usize) -> EncryptionContext {
         assert!(key.len() == 32);
-        let key = Key::<Aes256GcmSiv>::from_slice(&key[..]);
-        let cipher = Aes256GcmSiv::new(key);
+        let cipher_1 = Aes128::new(GenericArray::from_slice(&key[..16]));
+        let cipher_2 = Aes128::new(GenericArray::from_slice(&key[16..]));
+        let cipher = Xts128::<Aes128>::new(cipher_1, cipher_2);
 
         EncryptionContext { cipher, block_size }
     }
@@ -4851,76 +4849,36 @@ impl EncryptionContext {
         self.block_size
     }
 
-    #[cfg(target_os = "illumos")]
-    fn get_random_nonce(&self) -> Nonce {
-        let mut random_iv: Nonce = aes_gcm_siv::aead::generic_array::arr![u8;
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-        ];
-
-        // illumos' libc contains this
-        extern "C" {
-            pub fn arc4random_buf(buf: *mut libc::c_void, nbytes: libc::size_t);
-        }
-
-        unsafe {
-            arc4random_buf(random_iv.as_mut_ptr() as *mut libc::c_void, 12)
-        }
-
-        random_iv
-    }
-
-    #[cfg(not(target_os = "illumos"))]
-    fn get_random_nonce(&self) -> Nonce {
-        let mut random_iv: Nonce = aes_gcm_siv::aead::generic_array::arr![u8;
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-        ];
-
-        let filled = unsafe {
-            libc::getrandom(
-                random_iv.as_mut_ptr() as *mut libc::c_void,
-                12,
-                libc::GRND_NONBLOCK,
-            )
-        };
-
-        assert_eq!(filled, 12);
-
-        random_iv
-    }
-
     pub fn encrypt_in_place(
         &self,
         data: &mut [u8],
-    ) -> Result<(Nonce, Tag, u64)> {
-        let nonce = self.get_random_nonce();
+        starting_block: Block,
+    ) -> Result<u64> {
+        self.cipher.encrypt_area(
+            data,
+            self.block_size,
+            starting_block.value as u128,
+            get_tweak_default
+        );
 
-        let tag = self.cipher.encrypt_in_place_detached(&nonce, b"", data);
+        // Perform this after encryption so that the downstairs can verify it
+        // without the key.
+        let computed_hash = integrity_hash(&[data]);
 
-        if tag.is_err() {
-            bail!("Could not encrypt! {:?}", tag.err());
-        }
-
-        let tag = tag.unwrap();
-
-        // Hash [nonce + tag + data] in that order. Perform this after
-        // encryption so that the downstairs can verify it without the key.
-        let computed_hash = integrity_hash(&[&nonce[..], &tag[..], data]);
-
-        Ok((nonce, tag, computed_hash))
+        Ok(computed_hash)
     }
 
     pub fn decrypt_in_place(
         &self,
         data: &mut [u8],
-        nonce: &Nonce,
-        tag: &Tag,
+        starting_block: Block,
     ) -> Result<()> {
-        let result =
-            self.cipher.decrypt_in_place_detached(nonce, b"", data, tag);
-
-        if result.is_err() {
-            bail!("Could not decrypt! {:?}", result.err().unwrap());
-        }
+        self.cipher.decrypt_area(
+            data,
+            self.block_size,
+            starting_block.value as u128,
+            get_tweak_default
+        );
 
         Ok(())
     }
@@ -6000,8 +5958,8 @@ impl Upstairs {
                 let mut mut_data =
                     data.slice(cur_offset..(cur_offset + byte_len)).to_vec();
 
-                let (nonce, tag, hash) =
-                    match context.encrypt_in_place(&mut mut_data[..]) {
+                let hash =
+                    match context.encrypt_in_place(&mut mut_data[..], offset) {
                         Err(e) => {
                             if let Some(req) = req {
                                 req.send_err(CrucibleError::EncryptionError(
@@ -6018,8 +5976,8 @@ impl Upstairs {
                 (
                     Bytes::copy_from_slice(&mut_data),
                     Some(crucible_protocol::EncryptionContext {
-                        nonce: Vec::from(nonce.as_slice()),
-                        tag: Vec::from(tag.as_slice()),
+                        nonce: vec![],
+                        tag: vec![],
                     }),
                     hash,
                 )
