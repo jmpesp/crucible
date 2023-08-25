@@ -260,6 +260,8 @@ mod test {
         region_options.set_block_size(block_size);
         region_options
             .set_extent_size(Block::new(10, block_size.trailing_zeros()));
+        region_options.set_encrypted(true);
+
         region_options
     }
 
