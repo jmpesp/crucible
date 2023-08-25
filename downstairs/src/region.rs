@@ -848,13 +848,6 @@ impl Extent {
             (job_id, self.number, writes.len() as u64)
         });
 
-        let mut inner_guard = self.inner.lock().await;
-        // I realize this looks like some nonsense but what this is doing is
-        // borrowing the inner up-front from the MutexGuard, which will allow
-        // us to later disjointly borrow fields. Basically, we're helping the
-        // borrow-checker do its job.
-        let inner = &mut *inner_guard;
-
         for write in writes {
             self.check_input(write.offset, &write.data)?;
         }
@@ -869,6 +862,8 @@ impl Extent {
             });
             let mut write_run_start = 0;
             while write_run_start < writes.len() {
+                eprintln!("write run start {} len {}", write_run_start, writes.len());
+
                 // Starting from the first write in the potential run, we scan
                 // forward until we find a write with a block that isn't
                 // contiguous with the request before it. Since we're counting
@@ -884,7 +879,7 @@ impl Extent {
 
                 // Check if blocks have been written to in the range. If any
                 // have, then do not write those.
-                let requests: Vec<crucible_protocol::ReadRequest> = writes[write_run_start..n_contiguous_writes]
+                let requests: Vec<crucible_protocol::ReadRequest> = writes[write_run_start..(write_run_start + n_contiguous_writes)]
                     .iter()
                     .map(|write: &&crucible_protocol::Write| crucible_protocol::ReadRequest {
                         eid: write.eid,
@@ -922,6 +917,8 @@ impl Extent {
                 return Ok(());
             }
         }
+
+        let inner = self.inner.lock().await;
 
         inner.set_dirty()?;
 
@@ -1790,6 +1787,7 @@ impl Region {
         } else {
             cdt::os__write__start!(|| job_id);
         }
+
         for eid in batched_writes.keys() {
             let extent = self.get_opened_extent(*eid).await;
             let writes = batched_writes.get(eid).unwrap();
