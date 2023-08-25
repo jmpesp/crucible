@@ -20,7 +20,9 @@ pub struct Write {
     pub offset: Block,
     pub data: bytes::Bytes,
 
-    pub block_context: BlockContext,
+    /// The hash is performed **after** encryption so that the downstairs can
+    /// verify it without the key.
+    pub hash: u64,
 }
 
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -39,53 +41,10 @@ pub struct ReadResponse {
     pub offset: Block,
 
     pub data: bytes::BytesMut,
-    pub block_contexts: Vec<BlockContext>,
-}
 
-impl ReadResponse {
-    pub fn hashes(&self) -> Vec<u64> {
-        self.block_contexts.iter().map(|x| x.hash).collect()
-    }
-
-    pub fn encryption_contexts(&self) -> Vec<Option<&EncryptionContext>> {
-        self.block_contexts
-            .iter()
-            .map(|x| x.encryption_context.as_ref())
-            .collect()
-    }
-}
-
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub struct BlockContext {
-    /// If this is a non-encrypted write, then the integrity hasher has the
-    /// data as an input:
-    ///
-    ///   let hasher = Hasher()
-    ///   hasher.write(&data)
-    ///   hash = hasher.digest()
-    ///
-    /// If this is an encrypted write, then the integrity hasher has the
-    /// nonce, then tag, then data written to it.
-    ///
-    ///   let hasher = Hasher()
-    ///   hasher.write(&nonce)
-    ///   hasher.write(&tag)
-    ///   hasher.write(&data)
-    ///   hash = hasher.digest()
-    ///
     /// The hash is performed **after** encryption so that the downstairs can
     /// verify it without the key.
     pub hash: u64,
-
-    pub encryption_context: Option<EncryptionContext>,
-}
-
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub struct EncryptionContext {
-    pub nonce: Vec<u8>,
-    pub tag: Vec<u8>,
 }
 
 impl ReadResponse {
@@ -104,7 +63,7 @@ impl ReadResponse {
             eid: request.eid,
             offset: request.offset,
             data,
-            block_contexts: vec![],
+            hash: 0,
         }
     }
 
@@ -116,10 +75,7 @@ impl ReadResponse {
             eid: request.eid,
             offset: request.offset,
             data: BytesMut::from(data),
-            block_contexts: vec![BlockContext {
-                hash: crucible_common::integrity_hash(&[data]),
-                encryption_context: None,
-            }],
+            hash: crucible_common::integrity_hash(&[data]),
         }
     }
 }
@@ -582,13 +538,7 @@ impl CrucibleEncoder {
                 data.resize(sz, 1);
                 bytes::Bytes::from(data)
             },
-            block_context: BlockContext {
-                hash: 0,
-                encryption_context: Some(EncryptionContext {
-                    nonce: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    tag: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                }),
-            },
+            hash: 0,
         }
     }
 

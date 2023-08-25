@@ -9,7 +9,6 @@ pub(crate) mod protocol_test {
 
     use crate::test::up_test::csl;
     use crate::up_main;
-    use crate::BlockContext;
     use crate::BlockIO;
     use crate::Buffer;
     use crate::CrucibleError;
@@ -159,7 +158,7 @@ pub(crate) mod protocol_test {
             region_options.set_block_size(512);
             region_options.set_extent_size(self.extent_size);
             region_options.set_uuid(self.uuid);
-            region_options.set_encrypted(false);
+            region_options.set_encrypted(true);
 
             region_options.validate().unwrap();
 
@@ -458,6 +457,7 @@ pub(crate) mod protocol_test {
                 id: Uuid::new_v4(),
                 target: vec![ds1.local_addr, ds2.local_addr, ds3.local_addr],
                 flush_timeout: Some(86400.0),
+                key: String::from("t+gfFjPcyMmCOzBUt75JThfzWcxPVPanmZgA363iE9A="),
 
                 ..Default::default()
             };
@@ -554,10 +554,7 @@ pub(crate) mod protocol_test {
             eid: 0,
             offset: Block::new_512(0),
             data: BytesMut::from(&data[..]),
-            block_contexts: vec![BlockContext {
-                hash,
-                encryption_context: None,
-            }],
+            hash,
         }
     }
 

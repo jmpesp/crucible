@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
         target: opt.target,
         lossy: false,
         flush_timeout: opt.flush_timeout,
-        key: opt.key,
+        key: opt.key.unwrap(),
         cert_pem: opt.cert_pem,
         key_pem: opt.key_pem,
         root_cert_pem: opt.root_cert_pem,

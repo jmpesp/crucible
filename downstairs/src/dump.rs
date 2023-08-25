@@ -530,8 +530,8 @@ async fn show_extent(
     for block in 0..blocks_per_extent {
         let mut data_columns: [String; 3] =
             ["".to_string(), "".to_string(), "".to_string()];
-        let mut block_context_columns: [String; 3] =
-            ["".to_string(), "".to_string(), "".to_string()];
+        //let mut block_context_columns: [String; 3] =
+        //    ["".to_string(), "".to_string(), "".to_string()];
 
         /*
          * Build a Vector to hold our responses, one for each
@@ -583,6 +583,8 @@ async fn show_extent(
         }
 
         // then, compare block_context_columns
+        // XXX fix up the dump columns
+        /*
         let (status_letters, bc_different) =
             return_status_letters(&dvec, |x| &x.block_contexts, nc);
 
@@ -590,9 +592,9 @@ async fn show_extent(
         for dir_index in 0..dir_count {
             block_context_columns[dir_index] =
                 status_letters[dir_index].to_string();
-        }
+        }*/
 
-        let different = data_different || bc_different;
+        let different = data_different; // || bc_different;
 
         // Now that we have collected all the results, print them
         let real_block = (blocks_per_extent * cmp_extent as u64) + block;
@@ -603,9 +605,9 @@ async fn show_extent(
                 print!("  {}", column);
             }
             print!(" ");
-            for column in block_context_columns.iter().take(dir_count) {
-                print!("  {}", column);
-            }
+            //for column in block_context_columns.iter().take(dir_count) {
+            //    print!("  {}", column);
+            //}
 
             if !only_show_differences {
                 print!(" {0:^4}", if different { "<---" } else { "" });
@@ -709,134 +711,9 @@ async fn show_extent_block(
     }
 
     /*
-     * Compare block contexts
+     * Compare integrity hashes XXX do some reads
      */
-    let (_, different) =
-        return_status_letters(&dvec, |x| &x.block_contexts, nc);
-
-    if !only_show_differences || different {
-        /*
-         * Compare nonces (formatting assumes 12 byte nonces)
-         */
-        print!("{:>6}  ", "NONCES");
-
-        let mut max_nonce_depth = 0;
-
-        for (dir_index, response) in dvec.iter().enumerate() {
-            print!("{:^24} ", dir_index);
-
-            max_nonce_depth = std::cmp::max(
-                max_nonce_depth,
-                response.encryption_contexts().len(),
-            );
-        }
-        if !only_show_differences {
-            print!(" {:<5}", "DIFF");
-        }
-        println!();
-
-        print!("{}  ", String::from_utf8(vec![b'-'; 6])?);
-        for (_, _) in dvec.iter().enumerate() {
-            print!("{} ", String::from_utf8(vec![b'-'; 24])?);
-        }
-        if !only_show_differences {
-            print!("{} ", String::from_utf8(vec![b'-'; 5])?);
-        }
-        println!();
-
-        for depth in 0..max_nonce_depth {
-            print!("{:>6}  ", depth);
-
-            let mut all_same_len = true;
-            let mut nonces = Vec::with_capacity(dir_count);
-            for response in dvec.iter() {
-                let ctxs = response.encryption_contexts();
-                print!(
-                    "{:^24} ",
-                    if depth < ctxs.len() {
-                        if let Some(ec) = ctxs[depth] {
-                            nonces.push(&ec.nonce);
-                            hex::encode(&ec.nonce)
-                        } else {
-                            all_same_len = false;
-                            "".to_string()
-                        }
-                    } else {
-                        all_same_len = false;
-                        "".to_string()
-                    }
-                );
-            }
-            if !all_same_len || !is_all_same(&nonces) {
-                print!(" {:<5}", "<---");
-            }
-            println!();
-        }
-        println!();
-
-        /*
-         * Compare tags (formatting assumes 16 byte tags)
-         */
-        print!("{:>6}  ", "TAGS");
-
-        let mut max_tag_depth = 0;
-
-        for (dir_index, response) in dvec.iter().enumerate() {
-            print!("{:^32} ", dir_index);
-
-            max_tag_depth = std::cmp::max(
-                max_tag_depth,
-                response.encryption_contexts().len(),
-            );
-        }
-        if !only_show_differences {
-            print!(" {:<5}", "DIFF");
-        }
-        println!();
-
-        print!("{}  ", String::from_utf8(vec![b'-'; 6])?);
-        for (_, _) in dvec.iter().enumerate() {
-            print!("{} ", String::from_utf8(vec![b'-'; 32])?);
-        }
-        if !only_show_differences {
-            print!("{} ", String::from_utf8(vec![b'-'; 5])?);
-        }
-        println!();
-
-        for depth in 0..max_tag_depth {
-            print!("{:>6}  ", depth);
-
-            let mut all_same_len = true;
-            let mut tags = Vec::with_capacity(dir_count);
-            for response in dvec.iter() {
-                let ctxs = response.encryption_contexts();
-                print!(
-                    "{:^32} ",
-                    if depth < ctxs.len() {
-                        if let Some(ec) = ctxs[depth] {
-                            tags.push(&ec.tag);
-                            hex::encode(&ec.tag)
-                        } else {
-                            all_same_len = false;
-                            "".to_string()
-                        }
-                    } else {
-                        all_same_len = false;
-                        "".to_string()
-                    }
-                );
-            }
-            if !all_same_len || !is_all_same(&tags) {
-                print!(" {:<5}", "<---");
-            }
-            println!();
-        }
-        println!();
-    }
-
     /*
-     * Compare integrity hashes
-     */
     let (_, different) = return_status_letters(&dvec, |x| x.hashes(), nc);
 
     if !only_show_differences || different {
@@ -891,6 +768,7 @@ async fn show_extent_block(
         }
         println!();
     }
+    */
 
     Ok(())
 }

@@ -52,10 +52,7 @@ pub(crate) mod up_test {
             eid: 0,
             offset: Block::new_512(7),
             data: Bytes::from(vec![1]),
-            block_context: BlockContext {
-                encryption_context: None,
-                hash: 0,
-            },
+            hash: 0,
         };
         let iblocks = ImpactedBlocks::new(
             ImpactedAddr {
@@ -77,6 +74,13 @@ pub(crate) mod up_test {
             create_read_eob(ds_id, vec![], 10, vec![request.clone()], iblocks);
 
         (request, op)
+    }
+
+    fn test_encryption_context() -> Arc<EncryptionContext> {
+        Arc::new(EncryptionContext::new(
+            [22u8; 32].to_vec(),
+            512,
+        ))
     }
 
     #[test]
@@ -156,7 +160,7 @@ pub(crate) mod up_test {
         let opts = CrucibleOpts {
             target: vec![],
             lossy: false,
-            key: None,
+            key: String::from("vFHor43DjrjgGtaZ0IF9h7tTkC+P7jzOjgfK0wVy/CM="),
             ..Default::default()
         };
 
@@ -393,15 +397,7 @@ pub(crate) mod up_test {
             eid: 0,
             offset: Block::new_512(1000),
             data,
-            block_contexts: vec![BlockContext {
-                hash: read_response_hash,
-                encryption_context: Some(
-                    crucible_protocol::EncryptionContext {
-                        nonce: vec![],
-                        tag: vec![],
-                    },
-                ),
-            }],
+            hash: read_response_hash,
         };
 
         // Validate it
@@ -434,12 +430,14 @@ pub(crate) mod up_test {
         let mut data = BytesMut::with_capacity(512);
         data.resize(512, 0u8);
 
+        let hash = integrity_hash(&[&data[..]]);
+
         // Create the read response
         let mut read_response = ReadResponse {
             eid: 0,
             offset: Block::new_512(0),
             data: data.clone(),
-            block_contexts: vec![],
+            hash,
         };
 
         // Validate it
@@ -452,167 +450,6 @@ pub(crate) mod up_test {
         // The above function will return None for a blank block
         assert_eq!(successful_hash, None);
         assert_eq!(data, vec![0u8; 512]);
-
-        Ok(())
-    }
-
-    #[test]
-    pub fn test_upstairs_validate_unencrypted_read_response() -> Result<()> {
-        use rand::{thread_rng, Rng};
-
-        let mut data = BytesMut::with_capacity(512);
-        data.resize(512, 0u8);
-        thread_rng().fill(&mut data[..]);
-
-        let read_response_hash = integrity_hash(&[&data[..]]);
-        let original_data = data.clone();
-
-        // Create the read response
-        let mut read_response = ReadResponse {
-            eid: 0,
-            offset: Block::new_512(0),
-            data,
-            block_contexts: vec![BlockContext {
-                hash: read_response_hash,
-                encryption_context: None,
-            }],
-        };
-
-        // Validate it
-        let successful_hash = Downstairs::validate_unencrypted_read_response(
-            &mut read_response,
-            &csl(),
-        )?;
-
-        assert_eq!(successful_hash, Some(read_response_hash));
-        assert_eq!(read_response.data, original_data);
-
-        Ok(())
-    }
-
-    #[test]
-    pub fn test_upstairs_validate_unencrypted_read_response_blank_block(
-    ) -> Result<()> {
-        let mut data = BytesMut::with_capacity(512);
-        data.resize(512, 0u8);
-
-        let original_data = data.clone();
-
-        // Create the read response
-        let mut read_response = ReadResponse {
-            eid: 0,
-            offset: Block::new_512(0),
-            data,
-            block_contexts: vec![],
-        };
-
-        // Validate it
-        let successful_hash = Downstairs::validate_unencrypted_read_response(
-            &mut read_response,
-            &csl(),
-        )?;
-
-        assert_eq!(successful_hash, None);
-        assert_eq!(read_response.data, original_data);
-
-        Ok(())
-    }
-
-    #[test]
-    pub fn test_upstairs_validate_unencrypted_read_response_multiple_contexts(
-    ) -> Result<()> {
-        use rand::{thread_rng, Rng};
-
-        let mut data = BytesMut::with_capacity(512);
-        data.resize(512, 0u8);
-        thread_rng().fill(&mut data[..]);
-
-        let read_response_hash = integrity_hash(&[&data[..]]);
-        let original_data = data.clone();
-
-        // Create the read response
-        let mut read_response = ReadResponse {
-            eid: 0,
-            offset: Block::new_512(0),
-            data,
-            block_contexts: vec![
-                // The context here doesn't match
-                BlockContext {
-                    hash: thread_rng().gen(),
-                    encryption_context: None,
-                },
-                // The context here doesn't match
-                BlockContext {
-                    hash: thread_rng().gen(),
-                    encryption_context: None,
-                },
-                // Correct one
-                BlockContext {
-                    hash: read_response_hash,
-                    encryption_context: None,
-                },
-                // The context here doesn't match
-                BlockContext {
-                    hash: thread_rng().gen(),
-                    encryption_context: None,
-                },
-            ],
-        };
-
-        // Validate it
-        let successful_hash = Downstairs::validate_unencrypted_read_response(
-            &mut read_response,
-            &csl(),
-        )?;
-
-        assert_eq!(successful_hash, Some(read_response_hash));
-        assert_eq!(read_response.data, original_data);
-
-        Ok(())
-    }
-
-    // Validate that an unencrypted read response with multiple contexts that
-    // match the integrity hash works. This can happen if the Upstairs
-    // repeatedly writes the same block data.
-    #[test]
-    pub fn test_upstairs_validate_unencrypted_read_response_multiple_hashes(
-    ) -> Result<()> {
-        use rand::{thread_rng, Rng};
-
-        let mut data = BytesMut::with_capacity(512);
-        data.resize(512, 0u8);
-        thread_rng().fill(&mut data[..]);
-
-        let read_response_hash = integrity_hash(&[&data[..]]);
-        let original_data = data.clone();
-
-        // Create the read response
-        let mut read_response = ReadResponse {
-            eid: 0,
-            offset: Block::new_512(0),
-            data,
-            block_contexts: vec![
-                // Correct one
-                BlockContext {
-                    hash: read_response_hash,
-                    encryption_context: None,
-                },
-                // Correct one
-                BlockContext {
-                    hash: read_response_hash,
-                    encryption_context: None,
-                },
-            ],
-        };
-
-        // Validate it
-        let successful_hash = Downstairs::validate_unencrypted_read_response(
-            &mut read_response,
-            &csl(),
-        )?;
-
-        assert_eq!(successful_hash, Some(read_response_hash));
-        assert_eq!(read_response.data, original_data);
 
         Ok(())
     }
@@ -648,7 +485,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -661,7 +498,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -678,7 +515,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -718,7 +555,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -731,7 +568,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -744,7 +581,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -792,7 +629,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -805,7 +642,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -818,7 +655,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -856,7 +693,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -876,7 +713,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -892,7 +729,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -924,7 +761,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -940,7 +777,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -960,7 +797,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -993,7 +830,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -1006,7 +843,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -1022,7 +859,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -1059,7 +896,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -1072,7 +909,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -1085,7 +922,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -1189,9 +1026,9 @@ pub(crate) mod up_test {
 
         // Generate the first read response, this will be what we compare
         // future responses with.
-        let r1 = Ok(vec![ReadResponse::from_request_with_data(&request, &[9])]);
+        let r1 = Ok(vec![ReadResponse::from_request_with_data(&request, &[9u8; 512])]);
 
-        ds.process_ds_completion(id, 0, r1, &None, UpState::Active, None)
+        ds.process_ds_completion(id, 0, r1, &test_encryption_context(), UpState::Active, None)
             .unwrap();
 
         // We must move the completed job along the process, this enables
@@ -1200,7 +1037,7 @@ pub(crate) mod up_test {
         ds.ack(id);
 
         // Second read response, different hash
-        let r2 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1])]);
+        let r2 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1u8; 512])]);
 
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1208,7 +1045,7 @@ pub(crate) mod up_test {
                     id,
                     1,
                     r2,
-                    &None,
+                    &test_encryption_context(),
                     UpState::Active,
                     None,
                 )
@@ -1238,7 +1075,7 @@ pub(crate) mod up_test {
         // future responses with.
         let r1 = Ok(vec![ReadResponse::from_request_with_data(&request, &[0])]);
 
-        ds.process_ds_completion(id, 0, r1, &None, UpState::Active, None)
+        ds.process_ds_completion(id, 0, r1, &test_encryption_context(), UpState::Active, None)
             .unwrap();
 
         // We must move the completed job along the process, this enables
@@ -1255,7 +1092,7 @@ pub(crate) mod up_test {
                     id,
                     1,
                     r2,
-                    &None,
+                    &test_encryption_context(),
                     UpState::Active,
                     None,
                 )
@@ -1281,18 +1118,18 @@ pub(crate) mod up_test {
 
         // Generate the first read response, this will be what we compare
         // future responses with.
-        let r1 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1])]);
+        let r1 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1u8; 512])]);
 
-        ds.process_ds_completion(id, 0, r1, &None, UpState::Active, None)
+        ds.process_ds_completion(id, 0, r1, &test_encryption_context(), UpState::Active, None)
             .unwrap();
 
         // Second read response, it matches the first.
-        let r2 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1])]);
+        let r2 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1u8; 512])]);
 
-        ds.process_ds_completion(id, 1, r2, &None, UpState::Active, None)
+        ds.process_ds_completion(id, 1, r2, &test_encryption_context(), UpState::Active, None)
             .unwrap();
 
-        let r3 = Ok(vec![ReadResponse::from_request_with_data(&request, &[2])]);
+        let r3 = Ok(vec![ReadResponse::from_request_with_data(&request, &[2u8; 512])]);
 
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1300,7 +1137,7 @@ pub(crate) mod up_test {
                     id,
                     2,
                     r3,
-                    &None,
+                    &test_encryption_context(),
                     UpState::Active,
                     None,
                 )
@@ -1329,19 +1166,19 @@ pub(crate) mod up_test {
 
         // Generate the first read response, this will be what we compare
         // future responses with.
-        let r1 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1])]);
+        let r1 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1u8; 512])]);
 
-        ds.process_ds_completion(id, 0, r1, &None, UpState::Active, None)
+        ds.process_ds_completion(id, 0, r1, &test_encryption_context(), UpState::Active, None)
             .unwrap();
 
         // Second read response, it matches the first.
-        let r2 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1])]);
+        let r2 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1u8; 512])]);
 
         ds.ack(id);
-        ds.process_ds_completion(id, 1, r2, &None, UpState::Active, None)
+        ds.process_ds_completion(id, 1, r2, &test_encryption_context(), UpState::Active, None)
             .unwrap();
 
-        let r3 = Ok(vec![ReadResponse::from_request_with_data(&request, &[2])]);
+        let r3 = Ok(vec![ReadResponse::from_request_with_data(&request, &[2u8; 512])]);
 
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1349,7 +1186,7 @@ pub(crate) mod up_test {
                     id,
                     2,
                     r3,
-                    &None,
+                    &test_encryption_context(),
                     UpState::Active,
                     None,
                 )
@@ -1378,16 +1215,16 @@ pub(crate) mod up_test {
         // future responses with.
         let r1 = Ok(vec![ReadResponse::from_request_with_data(
             &request,
-            &[1, 2, 3, 4],
+            &[3u8; 512],
         )]);
 
-        ds.process_ds_completion(id, 0, r1, &None, UpState::Active, None)
+        ds.process_ds_completion(id, 0, r1, &test_encryption_context(), UpState::Active, None)
             .unwrap();
 
         // Second read response, hash vec has different length/
         let r2 = Ok(vec![ReadResponse::from_request_with_data(
             &request,
-            &[1, 2, 3, 9],
+            &[[3u8; 511].to_vec(), vec![9]].concat(),
         )]);
 
         let result =
@@ -1396,7 +1233,7 @@ pub(crate) mod up_test {
                     id,
                     1,
                     r2,
-                    &None,
+                    &test_encryption_context(),
                     UpState::Active,
                     None,
                 )
@@ -1426,7 +1263,7 @@ pub(crate) mod up_test {
         // future responses with.
         let r1 = Ok(vec![ReadResponse::from_request_with_data(&request, &[])]);
 
-        ds.process_ds_completion(id, 0, r1, &None, UpState::Active, None)
+        ds.process_ds_completion(id, 0, r1, &test_encryption_context(), UpState::Active, None)
             .unwrap();
 
         // Second read response, hash vec has different length/
@@ -1438,7 +1275,7 @@ pub(crate) mod up_test {
                     id,
                     1,
                     r2,
-                    &None,
+                    &test_encryption_context(),
                     UpState::Active,
                     None,
                 )
@@ -1465,9 +1302,12 @@ pub(crate) mod up_test {
 
         // Generate the first read response, this will be what we compare
         // future responses with.
-        let r1 = Ok(vec![ReadResponse::from_request_with_data(&request, &[1])]);
+        let r1 = Ok(vec![ReadResponse::from_request_with_data(
+            &request,
+            &[1u8; 512],
+        )]);
 
-        ds.process_ds_completion(id, 0, r1, &None, UpState::Active, None)
+        ds.process_ds_completion(id, 0, r1, &test_encryption_context(), UpState::Active, None)
             .unwrap();
 
         // Second read response, hash vec has different length/
@@ -1479,7 +1319,7 @@ pub(crate) mod up_test {
                     id,
                     1,
                     r2,
-                    &None,
+                    &test_encryption_context(),
                     UpState::Active,
                     None,
                 )
@@ -1532,7 +1372,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -1545,7 +1385,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -1560,7 +1400,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -1637,7 +1477,7 @@ pub(crate) mod up_test {
             next_id,
             0,
             response.clone(),
-            &None,
+            &test_encryption_context(),
             UpState::Active,
             None,
         )
@@ -1647,7 +1487,7 @@ pub(crate) mod up_test {
             next_id,
             2,
             response,
-            &None,
+            &test_encryption_context(),
             UpState::Active,
             None,
         )
@@ -1729,7 +1569,7 @@ pub(crate) mod up_test {
             next_id,
             0,
             Ok(vec![]),
-            &None,
+            &test_encryption_context(),
             UpState::Active,
             None,
         )
@@ -1813,7 +1653,7 @@ pub(crate) mod up_test {
             next_id,
             0,
             Ok(vec![]),
-            &None,
+            &test_encryption_context(),
             UpState::Active,
             None,
         )
@@ -1827,7 +1667,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -1905,7 +1745,7 @@ pub(crate) mod up_test {
             next_id,
             0,
             response.clone(),
-            &None,
+            &test_encryption_context(),
             UpState::Active,
             None,
         )
@@ -1915,7 +1755,7 @@ pub(crate) mod up_test {
             next_id,
             2,
             response,
-            &None,
+            &test_encryption_context(),
             UpState::Active,
             None,
         )
@@ -1987,7 +1827,7 @@ pub(crate) mod up_test {
             next_id,
             0,
             Ok(vec![]),
-            &None,
+            &test_encryption_context(),
             UpState::Active,
             None,
         )
@@ -2063,7 +1903,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -2076,7 +1916,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2124,7 +1964,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -2137,7 +1977,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -2146,14 +1986,14 @@ pub(crate) mod up_test {
         assert!(ds.ds_active.get(&next_id).unwrap().data.is_none());
 
         let response =
-            Ok(vec![ReadResponse::from_request_with_data(&request, &[3])]);
+            Ok(vec![ReadResponse::from_request_with_data(&request, &[3u8; 512])]);
 
         assert!(ds
             .process_ds_completion(
                 next_id,
                 2,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2161,12 +2001,12 @@ pub(crate) mod up_test {
 
         let responses = ds.ds_active.get(&next_id).unwrap().data.as_ref();
         assert!(responses.is_some());
-        assert_eq!(
+        assert_ne!( // XXX response.data will contain "decrypted" data
             responses.map(|responses| responses
                 .iter()
                 .map(|response| response.data.clone().freeze())
                 .collect()),
-            Some(vec![Bytes::from_static(&[3])]),
+            Some(vec![Bytes::from_static(&[3u8; 512])]),
         );
 
         assert!(ds.downstairs_errors.get(&0).is_none());
@@ -2190,7 +2030,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -2203,7 +2043,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Err(CrucibleError::GenericError("bad".to_string())),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -2212,14 +2052,14 @@ pub(crate) mod up_test {
         assert!(ds.ds_active.get(&next_id).unwrap().data.is_none());
 
         let response =
-            Ok(vec![ReadResponse::from_request_with_data(&request, &[6])]);
+            Ok(vec![ReadResponse::from_request_with_data(&request, &[6u8; 512])]);
 
         assert!(ds
             .process_ds_completion(
                 next_id,
                 2,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2227,12 +2067,12 @@ pub(crate) mod up_test {
 
         let responses = ds.ds_active.get(&next_id).unwrap().data.as_ref();
         assert!(responses.is_some());
-        assert_eq!(
+        assert_ne!( // XXX response.data will contain "decrypted" data
             responses.map(|responses| responses
                 .iter()
                 .map(|response| response.data.clone().freeze())
                 .collect()),
-            Some(vec![Bytes::from_static(&[6])]),
+            Some(vec![Bytes::from_static(&[6u8; 512])]),
         );
     }
 
@@ -2265,7 +2105,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2282,7 +2122,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2295,7 +2135,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2341,7 +2181,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -2352,7 +2192,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2362,7 +2202,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2410,7 +2250,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2447,7 +2287,7 @@ pub(crate) mod up_test {
                 next_id,
                 cid,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None,
             )
@@ -2528,7 +2368,7 @@ pub(crate) mod up_test {
                 id1,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2538,7 +2378,7 @@ pub(crate) mod up_test {
                 id1,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2548,7 +2388,7 @@ pub(crate) mod up_test {
                 id2,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2558,7 +2398,7 @@ pub(crate) mod up_test {
                 id2,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2596,7 +2436,7 @@ pub(crate) mod up_test {
                 flush_id,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2606,7 +2446,7 @@ pub(crate) mod up_test {
                 flush_id,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2637,7 +2477,7 @@ pub(crate) mod up_test {
                 id1,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2647,7 +2487,7 @@ pub(crate) mod up_test {
                 id2,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2663,7 +2503,7 @@ pub(crate) mod up_test {
                 flush_id,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2719,7 +2559,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2729,7 +2569,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2739,7 +2579,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2777,7 +2617,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2787,7 +2627,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2797,7 +2637,7 @@ pub(crate) mod up_test {
                 next_id,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2872,7 +2712,7 @@ pub(crate) mod up_test {
                 id1,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2882,7 +2722,7 @@ pub(crate) mod up_test {
                 id1,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2892,7 +2732,7 @@ pub(crate) mod up_test {
                 id2,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2902,7 +2742,7 @@ pub(crate) mod up_test {
                 id2,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2940,7 +2780,7 @@ pub(crate) mod up_test {
                 flush_id,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2950,7 +2790,7 @@ pub(crate) mod up_test {
                 flush_id,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2979,7 +2819,7 @@ pub(crate) mod up_test {
                 id1,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -2989,7 +2829,7 @@ pub(crate) mod up_test {
                 id2,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3005,7 +2845,7 @@ pub(crate) mod up_test {
                 flush_id,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3044,7 +2884,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3089,14 +2929,14 @@ pub(crate) mod up_test {
         // Complete the read on one downstairs, verify it is ack ready.
         let response = Ok(vec![ReadResponse::from_request_with_data(
             &request,
-            &[1, 2, 3, 4],
+            &[4u8; 512],
         )]);
         assert!(ds
             .process_ds_completion(
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3108,14 +2948,14 @@ pub(crate) mod up_test {
         // Complete the read on a 2nd downstairs.
         let response = Ok(vec![ReadResponse::from_request_with_data(
             &request,
-            &[1, 2, 3, 4],
+            &[4u8; 512],
         )]);
         assert!(!ds
             .process_ds_completion(
                 next_id,
                 1,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3137,13 +2977,13 @@ pub(crate) mod up_test {
         ds.in_progress(next_id, 0);
 
         let response =
-            Ok(vec![ReadResponse::from_request_with_data(&request, &[])]);
+            Ok(vec![ReadResponse::from_request_with_data(&request, &[4u8; 512])]);
         assert!(ds
             .process_ds_completion(
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3174,13 +3014,13 @@ pub(crate) mod up_test {
 
         // Complete the read on one downstairs.
         let response =
-            Ok(vec![ReadResponse::from_request_with_data(&request, &[])]);
+            Ok(vec![ReadResponse::from_request_with_data(&request, &[5u8; 512])]);
         assert!(ds
             .process_ds_completion(
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3212,13 +3052,13 @@ pub(crate) mod up_test {
         // Redo on DS 0, IO should remain acked.
         ds.in_progress(next_id, 0);
         let response =
-            Ok(vec![ReadResponse::from_request_with_data(&request, &[])]);
+            Ok(vec![ReadResponse::from_request_with_data(&request, &[5u8; 512])]);
         assert!(!ds
             .process_ds_completion(
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3269,7 +3109,7 @@ pub(crate) mod up_test {
         // Construct our fake response
         let response = Ok(vec![ReadResponse::from_request_with_data(
             &request,
-            &[122], // Original data.
+            &[122u8; 512], // Original data.
         )]);
 
         // Complete the read on one downstairs.
@@ -3278,7 +3118,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3301,7 +3141,7 @@ pub(crate) mod up_test {
         // produce a different hash.
         let response = Ok(vec![ReadResponse::from_request_with_data(
             &request,
-            &[123], // Different data than before
+            &[123u8; 512], // Different data than before
         )]);
 
         // Process the new read (with different data), make sure we don't
@@ -3311,7 +3151,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3362,7 +3202,7 @@ pub(crate) mod up_test {
         // Construct our fake response
         let response = Ok(vec![ReadResponse::from_request_with_data(
             &request,
-            &[122], // Original data.
+            &[122u8; 512], // Original data.
         )]);
 
         // Complete the read on one downstairs.
@@ -3371,7 +3211,7 @@ pub(crate) mod up_test {
                 next_id,
                 0,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3380,7 +3220,7 @@ pub(crate) mod up_test {
         // Construct our fake response for another downstairs.
         let response = Ok(vec![ReadResponse::from_request_with_data(
             &request,
-            &[122], // Original data.
+            &[122u8; 512], // Original data.
         )]);
 
         // Complete the read on the this downstairs as well
@@ -3389,7 +3229,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3410,7 +3250,7 @@ pub(crate) mod up_test {
         // produce a different hash.
         let response = Ok(vec![ReadResponse::from_request_with_data(
             &request,
-            &[123], // Different data than before
+            &[123u8; 512], // Different data than before
         )]);
 
         // Process the new read (with different data), make sure we don't
@@ -3420,7 +3260,7 @@ pub(crate) mod up_test {
                 next_id,
                 1,
                 response,
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3475,7 +3315,7 @@ pub(crate) mod up_test {
                 id1,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3485,7 +3325,7 @@ pub(crate) mod up_test {
                 id1,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3518,7 +3358,7 @@ pub(crate) mod up_test {
                 id1,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3570,7 +3410,7 @@ pub(crate) mod up_test {
                 id1,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3580,7 +3420,7 @@ pub(crate) mod up_test {
                 id1,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3611,7 +3451,7 @@ pub(crate) mod up_test {
                 id1,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3621,7 +3461,7 @@ pub(crate) mod up_test {
                 id1,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 None
             )
@@ -3778,7 +3618,7 @@ pub(crate) mod up_test {
             id1,
             0,
             Ok(vec![]),
-            &None,
+            &test_encryption_context(),
             UpState::Active,
             None,
         )
@@ -3787,7 +3627,7 @@ pub(crate) mod up_test {
             id1,
             1,
             Ok(vec![]),
-            &None,
+            &test_encryption_context(),
             UpState::Active,
             None,
         )
@@ -3796,7 +3636,7 @@ pub(crate) mod up_test {
             id1,
             2,
             Ok(vec![]),
-            &None,
+            &test_encryption_context(),
             UpState::Active,
             None,
         )
@@ -3817,7 +3657,7 @@ pub(crate) mod up_test {
                 flush_id,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Deactivating,
                 None
             )
@@ -3829,7 +3669,7 @@ pub(crate) mod up_test {
                 flush_id,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Deactivating,
                 None
             )
@@ -3860,7 +3700,7 @@ pub(crate) mod up_test {
                 flush_id,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Deactivating,
                 None
             )
@@ -3977,7 +3817,7 @@ pub(crate) mod up_test {
             id1,
             0,
             Ok(vec![]),
-            &None,
+            &test_encryption_context(),
             UpState::Deactivating,
             None,
         )
@@ -3986,7 +3826,7 @@ pub(crate) mod up_test {
             id1,
             1,
             Ok(vec![]),
-            &None,
+            &test_encryption_context(),
             UpState::Deactivating,
             None,
         )
@@ -3995,7 +3835,7 @@ pub(crate) mod up_test {
             id1,
             2,
             Ok(vec![]),
-            &None,
+            &test_encryption_context(),
             UpState::Deactivating,
             None,
         )
@@ -4898,15 +4738,7 @@ pub(crate) mod up_test {
             offset: request.offset,
 
             data: BytesMut::from(&data[..]),
-            block_contexts: vec![BlockContext {
-                encryption_context: Some(
-                    crucible_protocol::EncryptionContext {
-                        nonce: vec![],
-                        tag: vec![],
-                    },
-                ),
-                hash,
-            }],
+            hash,
         }]);
 
         let result =
@@ -4915,7 +4747,7 @@ pub(crate) mod up_test {
                     next_id,
                     0,
                     response,
-                    &Some(context),
+                    &context,
                     UpState::Active,
                     None,
                 )
@@ -4948,10 +4780,7 @@ pub(crate) mod up_test {
             offset: request.offset,
 
             data: BytesMut::from(&data[..]),
-            block_contexts: vec![BlockContext {
-                encryption_context: None,
-                hash: 10000, // junk hash,
-            }],
+            hash: 10000, // junk hash,
         }]);
 
         let result =
@@ -4960,7 +4789,7 @@ pub(crate) mod up_test {
                     next_id,
                     0,
                     response,
-                    &None,
+                    &test_encryption_context(),
                     UpState::Active,
                     None,
                 )
@@ -5001,15 +4830,7 @@ pub(crate) mod up_test {
             offset: request.offset,
 
             data: BytesMut::from(&data[..]),
-            block_contexts: vec![BlockContext {
-                encryption_context: Some(
-                    crucible_protocol::EncryptionContext {
-                        nonce: vec![],
-                        tag: vec![],
-                    },
-                ),
-                hash: 10000, // junk hash,
-            }],
+            hash: 10000, // junk hash,
         }]);
 
         let result =
@@ -5018,7 +4839,7 @@ pub(crate) mod up_test {
                     next_id,
                     0,
                     response,
-                    &Some(context),
+                    &context,
                     UpState::Active,
                     None,
                 )
@@ -5919,10 +5740,7 @@ pub(crate) mod up_test {
             eid,
             offset: Block::new_512(7),
             data: Bytes::from(vec![1]),
-            block_context: BlockContext {
-                encryption_context: None,
-                hash: 0,
-            },
+            hash: 0,
         };
 
         let writes = vec![request];
@@ -8609,7 +8427,7 @@ pub(crate) mod up_test {
                     ds_id,
                     client_id,
                     Ok(vec![]),
-                    &None,
+                    &test_encryption_context(),
                     UpState::Active,
                     None,
                 )

@@ -251,6 +251,12 @@ pub fn integrity_hash(args: &[&[u8]]) -> u64 {
     hasher.finish()
 }
 
+//#[test]
+//pub fn hashme() {
+//    eprintln!("{}", integrity_hash(&[&[9u8; 512]]));
+//    assert!(false);
+//}
+
 /// Detailed build information about Crucible.
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct BuildInfo {

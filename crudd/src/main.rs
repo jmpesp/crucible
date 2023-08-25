@@ -553,7 +553,7 @@ async fn main() -> Result<()> {
         target: opt.target.clone(),
         lossy: false,
         flush_timeout: None,
-        key: opt.key.clone(),
+        key: opt.key.clone().unwrap(),
         cert_pem: opt.cert_pem.clone(),
         key_pem: opt.key_pem.clone(),
         root_cert_pem: opt.root_cert_pem.clone(),

@@ -1735,6 +1735,13 @@ pub mod repair_test {
         }
     }
 
+    fn test_encryption_context() -> Arc<EncryptionContext> {
+        Arc::new(EncryptionContext::new(
+            [1u8; 32].to_vec(),
+            512,
+        ))
+    }
+
     async fn test_repair_extent_no_action(or_ds: u8) {
         // Make sure repair jobs can flow through the work queue.
         // This is a pretty heavy test in that we simulate the downstairs tasks
@@ -1777,7 +1784,7 @@ pub mod repair_test {
                 ds_close_id,
                 cid,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 Some(ei.clone()),
             )
@@ -2286,7 +2293,7 @@ pub mod repair_test {
                 ds_close_id,
                 cid,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 Some(ei.clone()),
             )
@@ -2470,7 +2477,7 @@ pub mod repair_test {
                 ds_close_id,
                 cid,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 Some(ei.clone()),
             )
@@ -2624,7 +2631,7 @@ pub mod repair_test {
                 ds_close_id,
                 cid,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 Some(ei.clone()),
             )
@@ -3326,7 +3333,7 @@ pub mod repair_test {
                 close_id,
                 0,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 Some(ei)
             )
@@ -3353,7 +3360,7 @@ pub mod repair_test {
                 close_id,
                 1,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 Some(ei)
             )
@@ -3374,7 +3381,7 @@ pub mod repair_test {
                 close_id,
                 2,
                 Ok(vec![]),
-                &None,
+                &test_encryption_context(),
                 UpState::Active,
                 Some(ei)
             )

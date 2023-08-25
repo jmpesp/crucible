@@ -31,7 +31,7 @@ fn build_region_definition(
         value: extent_info.blocks_per_extent,
         shift: extent_info.block_size.trailing_zeros(),
     });
-    region_options.set_encrypted(opts.key.is_some());
+    region_options.set_encrypted(true);
 
     let mut region_def = RegionDefinition::from_options(&region_options)?;
     region_def.set_extent_count(extent_info.extent_count);
@@ -3083,7 +3083,7 @@ mod test {
             ],
             lossy: false,
             flush_timeout: None,
-            key: Some(key_string),
+            key: key_string,
             cert_pem: None,
             key_pem: None,
             root_cert_pem: None,
@@ -3832,7 +3832,7 @@ mod test {
         n_opts.target[1] = "127.0.0.1:8888".parse().unwrap();
         let key_bytes = rand::thread_rng().gen::<[u8; 32]>();
         let key_string = engine::general_purpose::STANDARD.encode(key_bytes);
-        n_opts.key = Some(key_string);
+        n_opts.key = key_string;
 
         assert!(test_volume_replace_opts(
             vol_id,

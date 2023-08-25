@@ -45,7 +45,7 @@ pub struct CrucibleOpts {
     pub target: Vec<SocketAddr>,
     pub lossy: bool,
     pub flush_timeout: Option<f32>,
-    pub key: Option<String>,
+    pub key: String,
     pub cert_pem: Option<String>,
     pub key_pem: Option<String>,
     pub root_cert_pem: Option<String>,
@@ -54,20 +54,16 @@ pub struct CrucibleOpts {
 }
 
 impl CrucibleOpts {
-    pub fn key_bytes(&self) -> Option<Vec<u8>> {
-        if let Some(key) = &self.key {
-            // For xts, key size must be 32 bytes
-            let decoded_key = engine::general_purpose::STANDARD
-                .decode(key)
-                .expect("could not base64 decode key!");
+    pub fn key_bytes(&self) -> Vec<u8> {
+        // For xts, key size must be 32 bytes
+        let decoded_key = engine::general_purpose::STANDARD
+            .decode(&self.key)
+            .expect("could not base64 decode key!");
 
-            if decoded_key.len() != 32 {
-                panic!("Key length must be 32 bytes!");
-            }
-
-            Some(decoded_key)
-        } else {
-            None
+        if decoded_key.len() != 32 {
+            panic!("Key length must be 32 bytes!");
         }
+
+        decoded_key
     }
 }
