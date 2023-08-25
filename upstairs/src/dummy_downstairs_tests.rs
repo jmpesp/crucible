@@ -457,7 +457,7 @@ pub(crate) mod protocol_test {
                 id: Uuid::new_v4(),
                 target: vec![ds1.local_addr, ds2.local_addr, ds3.local_addr],
                 flush_timeout: Some(86400.0),
-                key: String::from("t+gfFjPcyMmCOzBUt75JThfzWcxPVPanmZgA363iE9A="),
+                key: Some(String::from("t+gfFjPcyMmCOzBUt75JThfzWcxPVPanmZgA363iE9A=")),
 
                 ..Default::default()
             };

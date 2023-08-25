@@ -160,7 +160,8 @@ pub(crate) mod up_test {
         let opts = CrucibleOpts {
             target: vec![],
             lossy: false,
-            key: String::from("vFHor43DjrjgGtaZ0IF9h7tTkC+P7jzOjgfK0wVy/CM="),
+            key: Some(String::from("vFHor43DjrjgGtaZ0IF9h7tTkC+P7jzOjgfK0wVy/CM=")),
+
             ..Default::default()
         };
 

@@ -4969,7 +4969,7 @@ impl Upstairs {
             target: vec![],
             lossy: false,
             flush_timeout: None,
-            key: String::from("4eGuucJiCh5dWbLTpX6AvYHUcCtBEWp+R7xUP3V9Wd8="),
+            key: Some(String::from("4eGuucJiCh5dWbLTpX6AvYHUcCtBEWp+R7xUP3V9Wd8=")),
             cert_pem: None,
             key_pem: None,
             root_cert_pem: None,

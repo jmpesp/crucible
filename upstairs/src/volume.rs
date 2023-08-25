@@ -3083,7 +3083,7 @@ mod test {
             ],
             lossy: false,
             flush_timeout: None,
-            key: key_string,
+            key: Some(key_string),
             cert_pem: None,
             key_pem: None,
             root_cert_pem: None,
@@ -3832,7 +3832,7 @@ mod test {
         n_opts.target[1] = "127.0.0.1:8888".parse().unwrap();
         let key_bytes = rand::thread_rng().gen::<[u8; 32]>();
         let key_string = engine::general_purpose::STANDARD.encode(key_bytes);
-        n_opts.key = key_string;
+        n_opts.key = Some(key_string);
 
         assert!(test_volume_replace_opts(
             vol_id,

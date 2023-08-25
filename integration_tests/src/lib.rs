@@ -226,7 +226,7 @@ mod test {
                 ],
                 lossy: false,
                 flush_timeout: None,
-                key: key_string,
+                key: Some(key_string),
                 cert_pem: None,
                 key_pem: None,
                 root_cert_pem: None,
