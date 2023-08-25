@@ -41,6 +41,7 @@ pub struct ReadResponse {
     pub offset: Block,
 
     pub data: bytes::BytesMut,
+    pub owned: bool,
 
     /// The hash is performed **after** encryption so that the downstairs can
     /// verify it without the key.
@@ -63,6 +64,7 @@ impl ReadResponse {
             eid: request.eid,
             offset: request.offset,
             data,
+            owned: true,
             hash: 0,
         }
     }
@@ -75,6 +77,7 @@ impl ReadResponse {
             eid: request.eid,
             offset: request.offset,
             data: BytesMut::from(data),
+            owned: true,
             hash: crucible_common::integrity_hash(&[data]),
         }
     }

@@ -3883,6 +3883,8 @@ impl Downstairs {
         // downstairs could roll back a block by writing an old data, or
         // clearing the block.
 
+        // If a block was written to, it will not be all zero (due to the
+        // avalanche effect).
         if response.data[..].iter().all(|&x| x == 0) {
             return Ok(None);
         }
@@ -8677,13 +8679,9 @@ impl GtoS {
                             span!(Level::TRACE, "copy to guest buffer")
                                 .entered();
 
-                        // If a block was written to, it will not be all zero
-                        // (due to the avalanche effect).
-                        let owned = !response.data.iter().all(|x| *x == 0);
-
                         for i in &response.data {
                             vec[offset] = *i;
-                            owned_vec[offset] = owned;
+                            owned_vec[offset] = response.owned;
                             offset += 1;
                         }
                     }

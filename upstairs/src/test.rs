@@ -398,6 +398,7 @@ pub(crate) mod up_test {
             eid: 0,
             offset: Block::new_512(1000),
             data,
+            owned: true,
             hash: read_response_hash,
         };
 
@@ -438,6 +439,7 @@ pub(crate) mod up_test {
             eid: 0,
             offset: Block::new_512(0),
             data: data.clone(),
+            owned: true,
             hash,
         };
 
@@ -4737,8 +4739,8 @@ pub(crate) mod up_test {
         let response = Ok(vec![ReadResponse {
             eid: request.eid,
             offset: request.offset,
-
             data: BytesMut::from(&data[..]),
+            owned: true,
             hash,
         }]);
 
@@ -4779,8 +4781,8 @@ pub(crate) mod up_test {
         let response = Ok(vec![ReadResponse {
             eid: request.eid,
             offset: request.offset,
-
             data: BytesMut::from(&data[..]),
+            owned: true,
             hash: 10000, // junk hash,
         }]);
 
@@ -4829,8 +4831,8 @@ pub(crate) mod up_test {
         let response = Ok(vec![ReadResponse {
             eid: request.eid,
             offset: request.offset,
-
             data: BytesMut::from(&data[..]),
+            owned: true,
             hash: 10000, // junk hash,
         }]);
 

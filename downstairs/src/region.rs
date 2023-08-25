@@ -783,6 +783,7 @@ impl Extent {
 
             for resp in &mut responses[resp_run_start..][..n_contiguous_requests] {
                 resp.hash = integrity_hash(&[&resp.data[..]]);
+                resp.owned = !resp.data.iter().all(|x| *x == 0u8);
             }
 
             cdt::extent__read__get__contexts__done!(|| {
@@ -898,7 +899,7 @@ impl Extent {
 
                 for response in &responses {
                     // If the block is *not* blank, skip writing it.
-                    if !response.data.iter().all(|x| *x == 0u8) {
+                    if response.owned {
                         let _ = writes_to_skip.insert(response.offset.value);
                     }
                 }
@@ -3449,6 +3450,7 @@ mod test {
                     eid: 0,
                     offset: Block::new_512(0),
                     data: BytesMut::from(data.as_ref()),
+                    owned: true,
                     hash,
                 }]
             );
@@ -3480,6 +3482,7 @@ mod test {
                     eid: 0,
                     offset: Block::new_512(1),
                     data: BytesMut::from(data.as_ref()),
+                    owned: true,
                     hash,
                 }]
             );

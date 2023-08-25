@@ -554,6 +554,7 @@ pub(crate) mod protocol_test {
             eid: 0,
             offset: Block::new_512(0),
             data: BytesMut::from(&data[..]),
+            owned: true,
             hash,
         }
     }
