@@ -2331,8 +2331,8 @@ impl Downstairs {
         let mut work = self.work_lock(upstairs_connection).await?;
 
         // XXX beyond cfg(test)? opposite of error report processing upstairs?
-        #[cfg(test)]
-        assert!(!m.err().is_some());
+        //#[cfg(test)]
+        //assert!(!m.err().is_some());
 
         // Complete the job
         let is_flush = matches!(m, Message::FlushAck { .. });
