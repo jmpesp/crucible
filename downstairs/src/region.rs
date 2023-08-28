@@ -98,6 +98,8 @@ impl Inner {
      * The flush and generation numbers will be updated at the same time.
      */
     fn set_flush_number(&self, new_flush: u64, new_gen: u64) -> Result<()> {
+        let tx = self.metadb.unchecked_transaction()?;
+
         let mut stmt = self.metadb.prepare_cached(
             "UPDATE metadata SET value=?1 WHERE name='flush_number'",
         )?;
@@ -119,6 +121,8 @@ impl Inner {
             .prepare_cached("UPDATE metadata SET value=0 WHERE name='dirty'")?;
 
         let _rows_affected = stmt.execute([])?;
+
+        tx.commit()?;
 
         Ok(())
     }
@@ -349,7 +353,7 @@ fn open_sqlite_connection<P: AsRef<Path>>(path: &P) -> Result<Connection> {
 
     assert!(metadb.is_autocommit());
     metadb.pragma_update(None, "journal_mode", "WAL")?;
-    metadb.pragma_update(None, "synchronous", "NORMAL")?;
+    metadb.pragma_update(None, "synchronous", "FULL")?;
 
     // 16 page * 4KiB page size = 64KiB cache size
     // Value chosen somewhat arbitrarily as a guess at a good starting point.
