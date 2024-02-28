@@ -75,6 +75,7 @@ enum IOop {
     Read {
         dependencies: Vec<JobId>, // Jobs that must finish before this
         requests: Vec<ReadRequest>,
+        client_restriction: bool,
     },
     Flush {
         dependencies: Vec<JobId>, // Jobs that must finish before this
@@ -1585,6 +1586,7 @@ impl Downstairs {
             IOop::Read {
                 dependencies,
                 requests,
+                client_restriction,
             } => {
                 /*
                  * Any error from an IO should be intercepted here and passed
@@ -1597,8 +1599,14 @@ impl Downstairs {
                     error!(self.log, "Upstairs inactive error");
                     Err(CrucibleError::UpstairsInactive)
                 } else {
-                    self.region.region_read(requests, job_id).await
+                    if *client_restriction {
+                        self.region.region_read(requests, job_id).await
+                    } else {
+                        // Blank response
+                        Ok(vec![])
+                    }
                 };
+
                 debug!(
                     self.log,
                     "Read      :{} deps:{:?} res:{}",
@@ -2381,6 +2389,7 @@ impl Downstairs {
                 job_id,
                 dependencies,
                 requests,
+                client_restriction,
                 ..
             } => {
                 cdt::submit__read__start!(|| job_id.0);
@@ -2388,6 +2397,7 @@ impl Downstairs {
                 let new_read = IOop::Read {
                     dependencies,
                     requests,
+                    client_restriction,
                 };
 
                 let mut d = ad.lock().await;

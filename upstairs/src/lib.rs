@@ -1162,6 +1162,7 @@ enum IOop {
     Read {
         dependencies: Vec<JobId>, // Jobs that must finish before this
         requests: Vec<ReadRequest>,
+        client_restriction: Option<ClientId>,
     },
     Flush {
         dependencies: Vec<JobId>, // Jobs that must finish before this
@@ -1235,6 +1236,7 @@ impl IOop {
             IOop::Read {
                 dependencies,
                 requests,
+                client_restriction: _,
             } => {
                 let job_type = "Read".to_string();
                 let num_blocks = requests.len();

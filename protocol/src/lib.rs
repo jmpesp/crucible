@@ -578,6 +578,7 @@ pub enum Message {
         job_id: JobId,
         dependencies: Vec<JobId>,
         requests: Vec<ReadRequest>,
+        client_restriction: bool,
     },
     ReadResponse {
         upstairs_id: Uuid,

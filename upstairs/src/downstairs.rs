@@ -489,6 +489,7 @@ impl Downstairs {
                 IOop::Read {
                     dependencies,
                     requests,
+                    client_restriction,
                 } => {
                     cdt::ds__read__io__start!(|| (new_id.0, client_id.get()));
                     ClientRequest::Message(Message::ReadRequest {
@@ -497,6 +498,13 @@ impl Downstairs {
                         job_id: new_id,
                         dependencies,
                         requests,
+                        client_restriction: if let Some(client_restriction) = client_restriction {
+                            client_restriction == client_id
+                            //true
+                        } else {
+                            // no restriction
+                            true
+                        },
                     })
                 }
                 IOop::ExtentFlushClose {
@@ -2204,6 +2212,17 @@ impl Downstairs {
         let aread = IOop::Read {
             dependencies,
             requests,
+            client_restriction: {
+                let candidates_for_read: Vec<ClientId> = self
+                    .clients
+                    .iter()
+                    .enumerate()
+                    .filter(|(_i, c)| c.state() == DsState::Active)
+                    .map(|(i, _c)| ClientId::new(i as u8))
+                    .collect();
+
+                candidates_for_read.choose(&mut rand::thread_rng()).copied()
+            },
         };
 
         let io = DownstairsIO {
@@ -3186,7 +3205,7 @@ impl Downstairs {
             // handled when we check the job result.
             if (wc.error + wc.skipped + wc.done) == 3 {
                 self.ackable_work.insert(ds_id);
-                debug!(self.log, "[{}] Set AckReady {}", client_id, job.ds_id);
+                info!(self.log, "[{}] Set AckReady {}", client_id, job.ds_id);
             }
         }
 

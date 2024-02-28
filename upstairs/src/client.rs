@@ -1234,6 +1234,8 @@ impl DownstairsClient {
         extent_info: Option<ExtentInfo>,
     ) -> bool {
         let ds_id = job.ds_id;
+        info!(self.log, "[{}] process_io_completion job {}", self.client_id, ds_id);
+
         if job.state[self.client_id] == IOState::Skipped {
             // This job was already marked as skipped, and at that time
             // all required action was taken on it.  We can drop any more
@@ -1309,6 +1311,7 @@ impl DownstairsClient {
                         IOop::Read {
                             dependencies: _,
                             requests: _,
+                            client_restriction: _,
                         } => {
                             // It's possible we get a read error if the
                             // downstairs disconnects. However XXX, someone
@@ -1362,36 +1365,47 @@ impl DownstairsClient {
                 IOop::Read {
                     dependencies: _dependencies,
                     requests,
+                    client_restriction,
                 } => {
                     /*
                      * For a read, make sure the data from a previous read
                      * has the same hash
                      */
                     let read_data: Vec<ReadResponse> = responses.unwrap();
-                    assert!(!read_data.is_empty());
-                    if job.read_response_hashes != read_response_hashes {
-                        // XXX This error needs to go to Nexus
-                        // XXX This will become the "force all downstairs
-                        // to stop and refuse to restart" mode.
-                        let msg = format!(
-                            "[{}] read hash mismatch on id {}\n\
-                            Expected {:x?}\n\
-                            Computed {:x?}\n\
-                            guest_id:{} request:{:?}\n\
-                            job state:{:?}",
-                            self.client_id,
-                            ds_id,
-                            job.read_response_hashes,
-                            read_response_hashes,
-                            job.guest_id,
-                            requests,
-                            job.state,
-                        );
-                        if job.replay {
-                            info!(self.log, "REPLAY {}", msg);
-                        } else {
-                            panic!("{}", msg);
+                    let read_is_valid = if let Some(client_restriction) = client_restriction {
+                        self.client_id == *client_restriction
+                    } else {
+                        true
+                    };
+
+                    if read_is_valid {
+                        assert!(!read_data.is_empty());
+                        if job.read_response_hashes != read_response_hashes {
+                            // XXX This error needs to go to Nexus
+                            // XXX This will become the "force all downstairs
+                            // to stop and refuse to restart" mode.
+                            let msg = format!(
+                                "[{}] read hash mismatch on id {}\n\
+                                Expected {:x?}\n\
+                                Computed {:x?}\n\
+                                guest_id:{} request:{:?}\n\
+                                job state:{:?}",
+                                self.client_id,
+                                ds_id,
+                                job.read_response_hashes,
+                                read_response_hashes,
+                                job.guest_id,
+                                requests,
+                                job.state,
+                            );
+                            if job.replay {
+                                info!(self.log, "REPLAY {}", msg);
+                            } else {
+                                panic!("{}", msg);
+                            }
                         }
+                    } else {
+                        // eat the empty response
                     }
                 }
                 /*
@@ -1422,41 +1436,75 @@ impl DownstairsClient {
              * returned ok.
              */
             match &job.work {
-                IOop::Read { .. } => {
-                    assert!(!read_data.is_empty());
-                    assert!(extent_info.is_none());
-                    if jobs_completed_ok == 1 {
-                        assert!(job.data.is_none());
-                        assert!(job.read_response_hashes.is_empty());
-                        job.data = Some(read_data);
-                        job.read_response_hashes = read_response_hashes;
-                        assert!(!job.acked);
-                        ackable = true;
-                        debug!(self.log, "Read AckReady {}", job.ds_id.0);
-                        cdt::up__to__ds__read__done!(|| job.guest_id.0);
+                IOop::Read { client_restriction, .. } => {
+                    let read_is_valid = if let Some(client_restriction) = client_restriction {
+                        self.client_id == *client_restriction
                     } else {
-                        /*
-                         * If another job has finished already, we can
-                         * compare our read hash to
-                         * that and verify they are the same.
-                         */
-                        debug!(self.log, "Read already AckReady {ds_id}");
-                        if job.read_response_hashes != read_response_hashes {
-                            // XXX This error needs to go to Nexus
-                            // XXX This will become the "force all downstairs
-                            // to stop and refuse to restart" mode.
-                            panic!(
-                                "[{}] read hash mismatch on {} \n\
-                                Expected {:x?}\n\
-                                Computed {:x?}\n\
-                                job: {:?}",
-                                self.client_id,
-                                ds_id,
-                                job.read_response_hashes,
-                                read_response_hashes,
-                                job,
-                            );
+                        true
+                    };
+
+                    assert!(extent_info.is_none());
+                    if read_is_valid {
+                        assert!(!read_data.is_empty());
+                        if client_restriction.is_none() {
+                            if jobs_completed_ok == 1 {
+                                assert!(job.data.is_none());
+                                assert!(job.read_response_hashes.is_empty());
+                                job.data = Some(read_data);
+                                job.read_response_hashes = read_response_hashes;
+                                assert!(!job.acked);
+                                ackable = true;
+                                info!(self.log, "Read AckReady {}", job.ds_id.0);
+                                cdt::up__to__ds__read__done!(|| job.guest_id.0);
+                            } else {
+                                /*
+                                 * If another job has finished already, we can
+                                 * compare our read hash to
+                                 * that and verify they are the same.
+                                 */
+                                info!(self.log, "Read already AckReady {ds_id}");
+                                if job.read_response_hashes != read_response_hashes {
+                                    // XXX This error needs to go to Nexus
+                                    // XXX This will become the "force all downstairs
+                                    // to stop and refuse to restart" mode.
+                                    panic!(
+                                        "[{}] read hash mismatch on {} \n\
+                                        Expected {:x?}\n\
+                                        Computed {:x?}\n\
+                                        read_is_valid: {}\n\
+                                        client_restriction {:?}\n\
+                                        client id {:?}\n\
+                                        job: {:?}",
+                                        self.client_id,
+                                        ds_id,
+                                        job.read_response_hashes,
+                                        read_response_hashes,
+                                        read_is_valid,
+                                        client_restriction,
+                                        self.client_id,
+                                        job,
+                                    );
+                                }
+                            }
+                        } else {
+                            // client_restriction is Some(..)
+                            //
+                            // It won't be valid to compare with other jobs, as
+                            // they will have returned blank responses.
+                            //
+                            // This is the only good response we're going to
+                            // get.
+                            assert!(job.data.is_none());
+                            assert!(job.read_response_hashes.is_empty());
+                            job.data = Some(read_data);
+                            job.read_response_hashes = read_response_hashes;
+                            assert!(!job.acked);
+                            ackable = true;
+                            info!(self.log, "Read AckReady {}", job.ds_id.0);
+                            cdt::up__to__ds__read__done!(|| job.guest_id.0);
                         }
+                    } else {
+                        // eat the empty response
                     }
                 }
                 IOop::Write { .. } => {
