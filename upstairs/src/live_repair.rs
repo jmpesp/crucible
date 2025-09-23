@@ -86,11 +86,11 @@ pub struct ExtentInfo {
 pub mod repair_test {
     use super::*;
     use crate::{
-        client::ClientAction,
+        client::{ClientAction, ClientRunResult},
         downstairs::DownstairsAction,
         upstairs::{
             test::{create_test_upstairs, start_up_and_repair},
-            Upstairs, UpstairsAction,
+            Upstairs, UpstairsAction, UpstairsState,
         },
     };
 
@@ -1275,6 +1275,7 @@ pub mod repair_test {
             assert_eq!(job.state[ClientId::new(1)], IOState::Skipped);
         }
     }
+
     #[test]
     fn test_repair_io_span_el_sent() {
         // Verify that IOs put on the queue when a downstairs is
@@ -1596,5 +1597,77 @@ pub mod repair_test {
         // proceed with the live-repair and the `repair_info` field is taken
         // (since it's used to decide whether to send a LiveRepair or NoOp).
         assert!(up.downstairs.clients[cid].repair_info.is_none());
+    }
+
+    #[test]
+    fn test_live_repair_all_clients_stop() {
+        // Active, and then one client goes away
+        let mut up = start_up_and_repair(ClientId::new(0));
+
+        // The Live repair has started
+        assert!(up.downstairs.live_repair_in_progress());
+
+        // And done some stuff
+        finish_live_repair(&mut up, 1000);
+
+        // Then all three go away (network weather due to timeout)
+        for cid in ClientId::iter() {
+            up.downstairs.fault_client(
+                cid,
+                &UpstairsState::Active,
+                ClientFaultReason::RequestedFault,
+            );
+        }
+
+        // Each come back: restart the IO task (because we'll be faking messages
+        // from it)
+        for cid in ClientId::iter() {
+            up.apply(UpstairsAction::Downstairs(DownstairsAction::Client {
+                client_id: cid,
+                action: ClientAction::TaskStopped(ClientRunResult::RequestedStop),
+            }));
+
+            let mode = ConnectionMode::Faulted;
+            for state in [
+                NegotiationStateData::WaitForPromote,
+                NegotiationStateData::WaitForRegionInfo,
+                NegotiationStateData::GetExtentVersions,
+                NegotiationStateData::LiveRepairReady,
+            ] {
+                up.downstairs.clients[cid].checked_state_transition(
+                    &up.state,
+                    DsStateData::Connecting { state, mode },
+                );
+            }
+        }
+
+        // Everyone is `Connecting { state: LiveRepairReady, mode: Faulted }`
+        // now!
+        //
+        // We can't complete LiveRepair anymore, we have to do reconciliation.
+
+        for cid in ClientId::iter() {
+            match up.downstairs.clients[cid].state_data() {
+                DsStateData::Connecting {
+                    state: NegotiationStateData::LiveRepairReady,
+                    mode: ConnectionMode::Faulted,
+                } => {
+                    // ok!
+                }
+
+                _ => {
+                    panic!("wrong state");
+                }
+            }
+        }
+
+        // Also, if we try to do live repair, we'll no-op, because there's a
+        // live repair in progress already (self.repair was never cleared)
+
+        assert!(up.downstairs.repair().is_some());
+
+        // The result is the Upstairs gets stuck.
+
+        assert!(false);
     }
 }

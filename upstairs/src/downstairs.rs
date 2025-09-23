@@ -1015,7 +1015,7 @@ impl Downstairs {
         self.clients
             .iter()
             .any(|c| c.state() == DsState::LiveRepair)
-            || self.repair.is_some()
+            || self.repair.is_some() // XXX nothing clears self.repair?
     }
 
     /// Tries to start live-repair
@@ -2712,6 +2712,7 @@ impl Downstairs {
                         ClientFaultReason::FailedLiveRepair,
                     );
                 }
+
                 // If just a single IO reported failure, we will fault this
                 // downstairs and it won't yet have had a chance to move back
                 // around to Connecting yet.
@@ -2735,12 +2736,14 @@ impl Downstairs {
                 // Other states are invalid
                 _ => {}
             }
+
             // Set repair_info to None, so that the next ExtentFlushClose sees
             // it empty (as expected). repair_info is set on all clients, even
             // those not directly participating in live-repair, so we have to
             // always clear it.
             self.clients[i].clear_repair_state();
         }
+
         assert!(
             found_valid_state,
             "abort_repair called without a valid client state: {:?}",
