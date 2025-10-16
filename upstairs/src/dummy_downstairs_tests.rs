@@ -3,6 +3,7 @@
 #[cfg(not(test))]
 compile_error!("dummy_downstairs should only be used in unit tests");
 
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,6 +55,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::codec::FramedRead;
@@ -80,6 +82,7 @@ pub struct DownstairsHandle {
     rx: mpsc::UnboundedReceiver<Message>,
     tx: mpsc::UnboundedSender<Message>,
     stop: oneshot::Sender<()>,
+    stop_replying_to_pings: watch::Sender<i32>,
 
     uuid: Uuid,
     local_addr: SocketAddr,
@@ -94,9 +97,11 @@ impl DownstairsHandle {
     /// (pings are answered inline)
     async fn recv(&mut self) -> Option<Message> {
         loop {
+            info!(self.log, "waiting for packet");
             let packet = self.rx.recv().await?;
+            info!(self.log, "got {packet:?}");
             if packet == Message::Ruok {
-                self.handle_ping()
+                panic!("saw ping");
             } else {
                 break Some(packet);
             }
@@ -108,25 +113,20 @@ impl DownstairsHandle {
     /// (pings are answered automatically)
     fn try_recv(&mut self) -> Result<Message, mpsc::error::TryRecvError> {
         loop {
+            info!(self.log, "try waiting for packet");
             let packet = self.rx.try_recv();
+            info!(self.log, "try got {packet:?}");
             if packet == Ok(Message::Ruok) {
-                self.handle_ping();
+                panic!("saw ping");
             } else {
                 break packet;
             }
         }
     }
 
-    fn handle_ping(&mut self) {
-        if self.cfg.reply_to_ping {
-            // Respond to pings right away
-            if let Err(e) = self.send(Message::Imok) {
-                error!(self.log, "could not send ping: {e:?}");
-            }
-            info!(self.log, "responded to ping");
-        } else {
-            info!(self.log, "ignored ping");
-        }
+    fn stop_replying_to_pings(&mut self) {
+        info!(self.log, "stop responding to pings");
+        self.stop_replying_to_pings.send(1).unwrap();
     }
 
     /// Send a message, pretending to be the Downstairs
@@ -134,6 +134,7 @@ impl DownstairsHandle {
         &mut self,
         m: Message,
     ) -> Result<(), Box<mpsc::error::SendError<Message>>> {
+        info!(self.log, "sending {m:?}");
         self.tx.send(m).map_err(Box::new)
     }
 
@@ -420,7 +421,6 @@ impl DownstairsHandle {
 #[derive(Clone)]
 pub struct DownstairsConfig {
     read_only: bool,
-    reply_to_ping: bool,
 
     extent_count: u32,
     extent_size: Block,
@@ -455,6 +455,8 @@ impl DownstairsConfig {
         let (loopback_tx, rx) = mpsc::unbounded_channel();
 
         let (stop, mut stop_rx) = oneshot::channel();
+        let (stop_replying_to_pings, mut stop_replying_to_pings_rx) =
+            watch::channel(0);
 
         let log_ = log.clone();
         let loopback_worker = tokio::task::spawn(async move {
@@ -467,6 +469,8 @@ impl DownstairsConfig {
             let mut fr = FramedRead::new(read, CrucibleDecoder::new());
             let mut fw = FramedWrite::new(write, CrucibleEncoder::new());
 
+            let mut reply_to_ping = true;
+
             loop {
                 tokio::select! {
                     _ = &mut stop_rx => {
@@ -476,29 +480,49 @@ impl DownstairsConfig {
                         );
                         break;
                     }
+                    _ = stop_replying_to_pings_rx.changed() => {
+                        info!(log, "stop replying to pings");
+                        reply_to_ping = false;
+                    }
                     r = fr.next() => {
-                        if let Some(t) = r {
-                            if let Err(e) = t {
+                        match r {
+                            Some(Ok(m)) => {
+                                // Respond to pings right away
+                                if reply_to_ping && matches!(m, Message::Ruok) {
+                                    if let Err(e) = fw.send(Message::Imok).await {
+                                        info!(
+                                            log,
+                                            "framed write error {e:?}; exiting"
+                                        );
+                                        break;
+                                    }
+                                    continue;
+                                }
+
+                                if let Err(e) = loopback_tx.send(m) {
+                                    info!(
+                                        log,
+                                        "loopback_tx error: {e:?}; exiting"
+                                    );
+                                    break;
+                                }
+                            }
+
+                            Some(Err(e)) => {
                                 info!(
                                     log,
                                     "framed read error: {e:?}; exiting"
                                 );
                                 break;
-                            } else if let Err(e) = loopback_tx.send(
-                                t.unwrap())
-                            {
+                            }
+
+                            None => {
                                 info!(
                                     log,
-                                    "loopback_tx error: {e:?}; exiting"
+                                    "framed read disconnected; exiting"
                                 );
                                 break;
                             }
-                        } else {
-                            info!(
-                                log,
-                                "framed read disconnected; exiting"
-                            );
-                            break;
                         }
                     }
                     t = loopback_rx.recv() => {
@@ -520,6 +544,9 @@ impl DownstairsConfig {
                     }
                 }
             }
+
+            info!(log, "loopback worker done");
+
             Ok(())
         });
 
@@ -530,6 +557,7 @@ impl DownstairsConfig {
             tx,
 
             stop,
+            stop_replying_to_pings,
             uuid,
             cfg: self,
             upstairs_session_id: None,
@@ -589,7 +617,6 @@ impl TestHarness {
     fn default_config(read_only: bool) -> DownstairsConfig {
         DownstairsConfig {
             read_only,
-            reply_to_ping: true,
 
             // Extent count is picked so that we can hit
             // IO_OUTSTANDING_MAX_BYTES in less than IO_OUTSTANDING_MAX_JOBS,
@@ -1627,7 +1654,7 @@ async fn test_byte_fault_condition() {
 #[tokio::test]
 async fn test_byte_fault_condition_offline() {
     let mut harness = TestHarness::new().await;
-    harness.ds1().cfg.reply_to_ping = false;
+    harness.ds1().stop_replying_to_pings();
 
     // Two different transitions occur during this test:
     // - We're not replying to pings, so DS1 will eventually transition from
@@ -1758,7 +1785,7 @@ async fn test_offline_can_deactivate() {
     // Verify that we can deactivate with a downstairs Offline when no IOs are
     // outstanding.
     let mut harness = TestHarness::new().await;
-    harness.ds1().cfg.reply_to_ping = false;
+    harness.ds1().stop_replying_to_pings();
 
     // We're not replying to pings, so DS1 will eventually transition from
     // Active -> Offline (after CLIENT_TIMEOUT_SECS seconds).
@@ -1801,7 +1828,7 @@ async fn test_offline_with_io_can_deactivate() {
     // Verify that we can deactivate with a downstairs Offline when there are
     // IOs are outstanding.
     let mut harness = TestHarness::new().await;
-    harness.ds1().cfg.reply_to_ping = false;
+    harness.ds1().stop_replying_to_pings();
 
     // We're not replying to pings, so DS1 will eventually transition from
     // Active -> Offline (after CLIENT_TIMEOUT_SECS seconds).
@@ -2005,7 +2032,7 @@ async fn test_job_fault_condition() {
 #[tokio::test]
 async fn test_job_fault_condition_offline() {
     let mut harness = TestHarness::new().await;
-    harness.ds1().cfg.reply_to_ping = false;
+    harness.ds1().stop_replying_to_pings();
 
     // Two different transitions occur during this test:
     // - We're not replying to pings, so DS1 will eventually transition from
@@ -2846,7 +2873,7 @@ async fn test_write_replay() {
 #[tokio::test]
 async fn test_no_send_offline() {
     let mut harness = TestHarness::new().await;
-    harness.ds1().cfg.reply_to_ping = false;
+    harness.ds1().stop_replying_to_pings();
 
     // Sleep until we're confident that the Downstairs is kicked out, answering
     // pings from the other two Downstairs
@@ -2922,7 +2949,6 @@ async fn test_ro_activate_from_list(activate: [bool; 3]) {
 
     let cfg = DownstairsConfig {
         read_only: true,
-        reply_to_ping: true,
         extent_count: DEFAULT_EXTENT_COUNT,
         extent_size: Block::new_512(DEFAULT_BLOCK_COUNT),
         gen_numbers: vec![0u64; DEFAULT_EXTENT_COUNT as usize],
@@ -3322,7 +3348,7 @@ async fn fast_flush_rejection() {
 }
 
 /// Test that a Write and ExtentLiveRepair cannot be concurrent
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 32)]
 async fn test_no_concurrent_write_and_live_repair() {
     let mut harness = TestHarness::new().await;
 
@@ -3475,6 +3501,12 @@ async fn test_no_concurrent_write_and_live_repair() {
     })
     .unwrap();
 
+    // Keep track of what jobs each downstairs has completed.
+
+    let mut ds1_completed: HashSet<JobId> = HashSet::new();
+    let mut ds2_completed: HashSet<JobId> = HashSet::new();
+    let mut ds3_completed: HashSet<JobId> = HashSet::new();
+
     // Send close responses for ds1, ds2, and ds3
 
     match &m1 {
@@ -3483,14 +3515,23 @@ async fn test_no_concurrent_write_and_live_repair() {
             session_id,
             job_id,
             extent_id,
+            dependencies,
             ..
         } => {
             assert!(*extent_id == ExtentId(0));
+
+            // No other jobs should be in flight and this is the first of the 4
+            // live repair jobs
+            assert!(dependencies.is_empty());
 
             // ds1 didn't get the flush, it was set to faulted
             let gen = 1;
             let flush = 0;
             let dirty = false;
+
+            // ds1 completed this job
+            eprintln!("ds1 complete close {job_id}");
+            ds1_completed.insert(*job_id);
 
             harness
                 .ds1()
@@ -3511,14 +3552,23 @@ async fn test_no_concurrent_write_and_live_repair() {
             session_id,
             job_id,
             extent_id,
+            dependencies,
             ..
         } => {
             assert!(*extent_id == ExtentId(0));
+
+            // No other jobs should be in flight and this is the first of the 4
+            // live repair jobs
+            assert!(dependencies.is_empty());
 
             // ds2 and ds3 did get a flush
             let gen = 0;
             let flush = 2;
             let dirty = false;
+
+            // ds2 completed this job
+            eprintln!("ds2 complete close {job_id}");
+            ds2_completed.insert(*job_id);
 
             harness
                 .ds2
@@ -3539,14 +3589,23 @@ async fn test_no_concurrent_write_and_live_repair() {
             session_id,
             job_id,
             extent_id,
+            dependencies,
             ..
         } => {
             assert!(*extent_id == ExtentId(0));
+
+            // No other jobs should be in flight and this is the first of the 4
+            // live repair jobs
+            assert!(dependencies.is_empty());
 
             // ds2 and ds3 did get a flush
             let gen = 0;
             let flush = 2;
             let dirty = false;
+
+            // ds3 completed this job
+            eprintln!("ds3 complete close {job_id}");
+            ds3_completed.insert(*job_id);
 
             harness
                 .ds3
@@ -3562,8 +3621,7 @@ async fn test_no_concurrent_write_and_live_repair() {
     }
 
     // Based on those gen, flush, and dirty values, ds1 should get the
-    // ExtentLiveRepair message, while ds2 and ds3 should get
-    // ExtentLiveNoOp.
+    // ExtentLiveRepair message, while ds2 and ds3 should get ExtentLiveNoOp.
 
     let m1 = harness.ds1().recv().await.unwrap();
     let m2 = harness.ds2.recv().await.unwrap();
@@ -3576,10 +3634,16 @@ async fn test_no_concurrent_write_and_live_repair() {
             job_id: _,
             extent_id,
             source_client_id,
+            dependencies,
             ..
         } => {
             assert!(*source_client_id != ClientId::new(0));
             assert!(*extent_id == ExtentId(0));
+
+            // The dependencies for this job should all have completed.
+            for dep in dependencies {
+                assert!(ds1_completed.contains(dep));
+            }
 
             // Not responding here means that downstairs 1 is still processing
             // this message.
@@ -3592,16 +3656,27 @@ async fn test_no_concurrent_write_and_live_repair() {
             upstairs_id,
             session_id,
             job_id,
-            ..
-        } => harness
-            .ds2
-            .send(Message::ExtentLiveAckId {
-                upstairs_id: *upstairs_id,
-                session_id: *session_id,
-                job_id: *job_id,
-                result: Ok(()),
-            })
-            .unwrap(),
+            dependencies,
+        } => {
+            // The dependencies for this job should all have completed.
+            for dep in dependencies {
+                assert!(ds2_completed.contains(dep));
+            }
+
+            // ds2 completed this job
+            eprintln!("ds2 complete no-op {job_id}");
+            ds2_completed.insert(*job_id);
+
+            harness
+                .ds2
+                .send(Message::ExtentLiveAckId {
+                    upstairs_id: *upstairs_id,
+                    session_id: *session_id,
+                    job_id: *job_id,
+                    result: Ok(()),
+                })
+                .unwrap();
+        }
         _ => panic!("saw {m2:?}"),
     }
 
@@ -3610,17 +3685,127 @@ async fn test_no_concurrent_write_and_live_repair() {
             upstairs_id,
             session_id,
             job_id,
+            dependencies,
             ..
-        } => harness
-            .ds3
-            .send(Message::ExtentLiveAckId {
-                upstairs_id: *upstairs_id,
-                session_id: *session_id,
-                job_id: *job_id,
-                result: Ok(()),
-            })
-            .unwrap(),
+        } => {
+            // The dependencies for this job should all have completed.
+            for dep in dependencies {
+                assert!(ds3_completed.contains(dep));
+            }
+
+            // ds3 completed this job
+            eprintln!("ds3 complete no-op {job_id}");
+            ds3_completed.insert(*job_id);
+
+            harness
+                .ds3
+                .send(Message::ExtentLiveAckId {
+                    upstairs_id: *upstairs_id,
+                    session_id: *session_id,
+                    job_id: *job_id,
+                    result: Ok(()),
+                })
+                .unwrap();
+        }
         _ => panic!("saw {m3:?}"),
+    }
+
+    // Stop downstairs 1 from responding to pings
+    harness.ds1().stop_replying_to_pings();
+
+    // It will eventually time out, causing the rest of the live repair jobs to
+    // fire.
+
+    // downstairs 2 and 3 should receive another ExtentLiveNoOp, that depends on
+    // the previous one.
+
+    // Continue faking responses for downstairs 2 and 3, but 1 is still at
+    // Message::ExtentLiveRepair
+
+    let mut saw_more = 0;
+
+    loop {
+        eprintln!("waiting for additional no-ops {saw_more}");
+        if saw_more == 2 {
+            break;
+        }
+
+        tokio::select! {
+            m2 = harness.ds2.recv() => {
+                let m2 = m2.unwrap();
+                eprintln!("m2 is {m2:?}");
+                match &m2 {
+                    Message::ExtentLiveNoOp {
+                        upstairs_id,
+                        session_id,
+                        job_id,
+                        dependencies,
+                    } => {
+                        saw_more += 1;
+
+                        // The dependencies for this job should all have
+                        // completed.
+                        for dep in dependencies {
+                            assert!(ds2_completed.contains(dep));
+                        }
+
+                        // ds2 completed this job
+                        eprintln!("ds2 complete no-op {job_id}");
+                        ds2_completed.insert(*job_id);
+
+                        harness
+                            .ds2
+                            .send(Message::ExtentLiveAckId {
+                                upstairs_id: *upstairs_id,
+                                session_id: *session_id,
+                                job_id: *job_id,
+                                result: Ok(()),
+                            })
+                            .unwrap();
+                    }
+
+                    _ => panic!("saw {m2:?}"),
+                }
+            }
+
+            m3 = harness.ds3.recv() => {
+                let m3 = m3.unwrap();
+                eprintln!("m3 is {m3:?}");
+                match &m3 {
+                    Message::ExtentLiveNoOp {
+                        upstairs_id,
+                        session_id,
+                        job_id,
+                        dependencies,
+                        ..
+                    } => {
+                        saw_more += 1;
+
+                        // The dependencies for this job should all have
+                        // completed.
+                        for dep in dependencies {
+                            assert!(ds3_completed.contains(dep));
+                        }
+
+                        // ds3 completed this job
+                        eprintln!("ds3 complete no-op {job_id}");
+                        ds3_completed.insert(*job_id);
+
+                        harness
+                            .ds3
+                            .send(Message::ExtentLiveAckId {
+                                upstairs_id: *upstairs_id,
+                                session_id: *session_id,
+                                job_id: *job_id,
+                                result: Ok(()),
+                            })
+                            .unwrap();
+                    }
+
+                    _ => panic!("saw {m3:?}"),
+                }
+            }
+        }
     }
 
     // Continue faking responses for downstairs 2 and 3, but 1 is still at
@@ -3630,6 +3815,7 @@ async fn test_no_concurrent_write_and_live_repair() {
         matches!(x, Message::ExtentLiveReopen { .. })
     })
     .unwrap();
+
     let m3 = filter_out(&mut ds3_buffered_messages, |x| {
         matches!(x, Message::ExtentLiveReopen { .. })
     })
@@ -3640,16 +3826,28 @@ async fn test_no_concurrent_write_and_live_repair() {
             upstairs_id,
             session_id,
             job_id,
+            dependencies,
             ..
-        } => harness
-            .ds2
-            .send(Message::ExtentLiveAckId {
-                upstairs_id: *upstairs_id,
-                session_id: *session_id,
-                job_id: *job_id,
-                result: Ok(()),
-            })
-            .unwrap(),
+        } => {
+            // The dependencies for this job should all have completed.
+            for dep in dependencies {
+                assert!(ds2_completed.contains(dep));
+            }
+
+            // ds2 completed this job
+            eprintln!("ds2 complete reopen {job_id}");
+            ds2_completed.insert(*job_id);
+
+            harness
+                .ds2
+                .send(Message::ExtentLiveAckId {
+                    upstairs_id: *upstairs_id,
+                    session_id: *session_id,
+                    job_id: *job_id,
+                    result: Ok(()),
+                })
+                .unwrap();
+        }
         _ => panic!("saw {m2:?}"),
     }
 
@@ -3658,22 +3856,30 @@ async fn test_no_concurrent_write_and_live_repair() {
             upstairs_id,
             session_id,
             job_id,
+            dependencies,
             ..
-        } => harness
-            .ds3
-            .send(Message::ExtentLiveAckId {
-                upstairs_id: *upstairs_id,
-                session_id: *session_id,
-                job_id: *job_id,
-                result: Ok(()),
-            })
-            .unwrap(),
+        } => {
+            // The dependencies for this job should all have completed.
+            for dep in dependencies {
+                assert!(ds3_completed.contains(dep));
+            }
+
+            // ds3 completed this job
+            eprintln!("ds3 complete reopen {job_id}");
+            ds3_completed.insert(*job_id);
+
+            harness
+                .ds3
+                .send(Message::ExtentLiveAckId {
+                    upstairs_id: *upstairs_id,
+                    session_id: *session_id,
+                    job_id: *job_id,
+                    result: Ok(()),
+                })
+                .unwrap();
+        }
         _ => panic!("saw {m3:?}"),
     }
-
-    // Downstairs 2 and 3 have completed the batch of live repair jobs for
-    // extent 0. Now, send a write that impacts extent 0. It should _not_ be
-    // sent to downstairs 2 or 3.
 
     let write_handle = harness.spawn(|guest| async move {
         let mut data = BytesMut::new();
@@ -3684,41 +3890,114 @@ async fn test_no_concurrent_write_and_live_repair() {
     // Wait until the write worked
     write_handle.await.unwrap();
 
+    // Downstairs 2 and 3 have completed all four live repair jobs for extent 0.
+
     // See if downstairs 2 or 3 received anything
 
-    match harness.ds2.try_recv() {
-        Ok(m) => {
-            if matches!(m, Message::Write { .. }) {
-                panic!("downstairs 2 received a write!");
-            } else {
-                eprintln!("downstairs 2 received {m:?}");
+    let mut saw_more = 0;
+
+    loop {
+        eprintln!("waiting for additional no-ops {saw_more}");
+        if saw_more == 2 {
+            break;
+        }
+
+        tokio::select! {
+            m2 = harness.ds2.recv() => {
+                saw_more += 1;
+                let m2 = m2.unwrap();
+                eprintln!("m2 is {m2:?}");
+                match &m2 {
+                    // Flush comes after live repair error
+                    Message::Flush {
+                        job_id,
+                        upstairs_id,
+                        session_id,
+                        dependencies,
+                        ..
+                    } => {
+                        for dep in dependencies {
+                            assert!(ds2_completed.contains(dep));
+                        }
+
+                        // ds2 completed this job
+                        eprintln!("ds2 complete flush {job_id}");
+                        ds2_completed.insert(*job_id);
+
+                        harness
+                            .ds2
+                            .send(Message::FlushAck {
+                                upstairs_id: *upstairs_id,
+                                session_id: *session_id,
+                                job_id: *job_id,
+                                result: Ok(()),
+                            })
+                            .unwrap();
+                    }
+
+                    Message::Write { header, .. } => {
+                        // The dependencies for this job should all have
+                        // completed.
+                        for dep in &header.dependencies {
+                            assert!(ds2_completed.contains(&dep));
+                        }
+
+                        panic!("downstairs 2 received a write!");
+                    }
+
+                    _ => {
+                        eprintln!("downstairs 2 received {m2:?}");
+                    }
+                }
             }
-        }
 
-        Err(TryRecvError::Empty) => {
-            // Ok, there's no message
-        }
+            m3 = harness.ds3.recv() => {
+                saw_more += 1;
+                let m3 = m3.unwrap();
+                eprintln!("m3 is {m3:?}");
+                match &m3 {
+                    // Flush comes after live repair error
+                    Message::Flush {
+                        job_id,
+                        upstairs_id,
+                        session_id,
+                        dependencies,
+                        ..
+                    } => {
+                        for dep in dependencies {
+                            assert!(ds3_completed.contains(dep));
+                        }
 
-        Err(TryRecvError::Disconnected) => {
-            panic!("downstairs 2 unexpected disconnect");
-        }
-    }
+                        // ds3 completed this job
+                        eprintln!("ds3 complete flush {job_id}");
+                        ds3_completed.insert(*job_id);
 
-    match harness.ds3.try_recv() {
-        Ok(m) => {
-            if matches!(m, Message::Write { .. }) {
-                panic!("downstairs 3 received a write!");
-            } else {
-                eprintln!("downstairs 3 received {m:?}");
+                        harness
+                            .ds2
+                            .send(Message::FlushAck {
+                                upstairs_id: *upstairs_id,
+                                session_id: *session_id,
+                                job_id: *job_id,
+                                result: Ok(()),
+                            })
+                            .unwrap();
+                    }
+
+                    Message::Write { header, .. } => {
+                        // The dependencies for this job should all have
+                        // completed.
+                        for dep in &header.dependencies {
+                            assert!(ds3_completed.contains(&dep));
+                        }
+
+                        panic!("downstairs 3 received a write!");
+                    }
+
+                    _ => {
+                        eprintln!("downstairs 3 received {m3:?}");
+                    }
+                }
             }
-        }
-
-        Err(TryRecvError::Empty) => {
-            // Ok, there's no message
-        }
-
-        Err(TryRecvError::Disconnected) => {
-            panic!("downstairs 3 unexpected disconnect");
         }
     }
 }

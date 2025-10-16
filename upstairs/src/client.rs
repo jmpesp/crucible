@@ -2429,6 +2429,7 @@ impl ClientIoTask {
                 }
 
                 _ = sleep_until(ping_deadline) => {
+                    info!(self.log, "sending ping {ping_count}");
                     ping_deadline = Instant::now() + PING_INTERVAL;
                     ping_count += 1;
                     cdt::ds__ping__sent!(|| (ping_count, self.client_id.get()));
