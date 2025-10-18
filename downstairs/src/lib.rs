@@ -314,6 +314,7 @@ impl RegionReadResponse {
 ///
 /// Do not derive `Clone` on this type; it will be expensive and tempting to
 /// call by accident!
+#[derive(Debug, PartialEq)]
 pub(crate) struct ExtentReadResponse {
     blocks: Vec<ReadBlockContext>,
     /// At this point, the buffer must be fully initialized

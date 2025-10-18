@@ -102,6 +102,12 @@ pub struct RawInner {
 
     /// Denominator corresponding to `extra_syscall_count`
     extra_syscall_denominator: u64,
+
+    #[cfg(test)]
+    bail_after_context_write: bool,
+
+    #[cfg(test)]
+    bail_after_data_write: bool,
 }
 
 /// Data structure containing a list of active context slots
@@ -378,6 +384,13 @@ impl ExtentInner for RawInner {
 
         self.set_block_contexts(&block_ctx)?;
 
+        #[cfg(test)]
+        if self.bail_after_context_write {
+            return Err(CrucibleError::IoError(
+                "bail_after_context_write".to_string(),
+            ));
+        }
+
         cdt::extent__write__raw__context__insert__done!(|| {
             (job_id.0, self.extent_number.0, num_blocks)
         });
@@ -404,6 +417,13 @@ impl ExtentInner for RawInner {
         });
 
         let r = self.write_inner(write, &writes_to_skip);
+
+        #[cfg(test)]
+        if self.bail_after_data_write {
+            return Err(CrucibleError::IoError(
+                "bail_after_data_write".to_string(),
+            ));
+        }
 
         if r.is_err() {
             for i in 0..write.block_contexts.len() {
@@ -749,6 +769,10 @@ impl RawInner {
             context_slot_dirty: ContextSlotsDirty::new(extent_size.value),
             extra_syscall_count: 0,
             extra_syscall_denominator: 0,
+            #[cfg(test)]
+            bail_after_context_write: false,
+            #[cfg(test)]
+            bail_after_data_write: false,
         };
         // Setting the flush number also writes the extent version, since
         // they're serialized together in the same block.
@@ -907,6 +931,10 @@ impl RawInner {
             context_slot_dirty: ContextSlotsDirty::new(def.extent_size().value),
             extra_syscall_count: 0,
             extra_syscall_denominator: 0,
+            #[cfg(test)]
+            bail_after_context_write: false,
+            #[cfg(test)]
+            bail_after_data_write: false,
         })
     }
 
@@ -2548,5 +2576,479 @@ mod test {
         };
         let mut ctx_buf = [0u8; BLOCK_CONTEXT_SLOT_SIZE_BYTES as usize];
         bincode::serialize_into(ctx_buf.as_mut_slice(), &Some(c)).unwrap();
+    }
+
+    struct InterruptedWriteTest {
+        dir: tempfile::TempDir,
+        inner: RawInner,
+
+        first_data: Bytes,
+        first_context: BlockContext,
+
+        second_data: Bytes,
+        second_context: BlockContext,
+
+        job_id: JobId,
+    }
+
+    impl InterruptedWriteTest {
+        fn new() -> Result<InterruptedWriteTest> {
+            let dir = tempdir()?;
+            eprintln!("tempdir is {dir:?}");
+
+            let mut inner = RawInner::create(
+                dir.as_ref(),
+                &new_region_definition(),
+                ExtentId(0),
+            )?;
+
+            // Encryption context for block 0 should start blank
+
+            assert_eq!(inner.active_context[0], ContextSlot::A);
+            assert!(inner.get_block_context(0)?.is_none());
+
+            let first_data = Bytes::from(vec![0x55; 512]);
+            let first_context = BlockContext {
+                encryption_context: Some(EncryptionContext {
+                    nonce: [0x11; 12],
+                    tag: [0x22; 16],
+                }),
+                hash: integrity_hash(&[&first_data[..]]),
+            };
+
+            let second_data = Bytes::from(vec![0x99; 512]);
+            let second_context = BlockContext {
+                encryption_context: Some(EncryptionContext {
+                    nonce: [0xEE; 12],
+                    tag: [0xFF; 16],
+                }),
+                hash: integrity_hash(&[&second_data[..]]),
+            };
+
+            Ok(InterruptedWriteTest {
+                dir,
+                inner,
+
+                first_data,
+                first_context,
+
+                second_data,
+                second_context,
+
+                job_id: JobId(10),
+            })
+        }
+
+        fn setup(&mut self) -> Result<()> {
+            // Do a write and flush of the first block
+
+            let write = ExtentWrite {
+                offset: BlockOffset(0),
+                data: self.first_data.clone(),
+                block_contexts: vec![self.first_context.clone()],
+            };
+
+            self.inner.write(self.job_id, &write, false, IOV_MAX_TEST)?;
+            self.job_id.0 += 1;
+
+            self.inner.flush(0, 0, self.job_id.into())?;
+            self.job_id.0 += 1;
+
+            // Everything's valid so far
+
+            self.inner.validate()?;
+
+            // One context is set, one is not
+
+            assert_eq!(self.inner.active_context[0], ContextSlot::B);
+
+            let ctx = self.inner.get_block_context(0)?;
+
+            assert_eq!(
+                ctx,
+                Some(DownstairsBlockContext {
+                    block_context: self.first_context,
+                    block: 0,
+                    on_disk_hash: self.first_context.hash,
+                }),
+            );
+
+            Ok(())
+        }
+
+        fn second_write_interrupt_after_context_write(&mut self) -> Result<()> {
+            // Now, simulate a second write that will be interrupted after the
+            // contexts are written out.
+
+            let write = ExtentWrite {
+                offset: BlockOffset(0),
+                data: self.second_data.clone(),
+                block_contexts: vec![self.second_context.clone()],
+            };
+
+            self.inner.bail_after_context_write = true;
+
+            let result =
+                self.inner.write(self.job_id, &write, false, IOV_MAX_TEST);
+            self.job_id.0 += 1;
+
+            assert!(result.is_err());
+
+            self.inner.bail_after_context_write = false;
+
+            // Everything should still be valid
+
+            self.inner.validate()?;
+
+            Ok(())
+        }
+
+        fn second_write_interrupt_after_data_write(&mut self) -> Result<()> {
+            // Now, simulate a second write that will be interrupted after the
+            // data block(s) are written out.
+
+            let write = ExtentWrite {
+                offset: BlockOffset(0),
+                data: self.second_data.clone(),
+                block_contexts: vec![self.second_context.clone()],
+            };
+
+            self.inner.bail_after_data_write = true;
+
+            let result =
+                self.inner.write(self.job_id, &write, false, IOV_MAX_TEST);
+            self.job_id.0 += 1;
+
+            assert!(result.is_err());
+
+            self.inner.bail_after_data_write = false;
+
+            // Everything should still be valid
+
+            // XXX uncommenting this fill show "block 0 has an active slot with
+            // mismatched hash" !
+            //self.inner.validate()?;
+
+            Ok(())
+        }
+
+        fn second_write(&mut self) -> Result<()> {
+            let write = ExtentWrite {
+                offset: BlockOffset(0),
+                data: self.second_data.clone(),
+                block_contexts: vec![self.second_context.clone()],
+            };
+
+            self.inner.write(self.job_id, &write, false, IOV_MAX_TEST)?;
+            self.job_id.0 += 1;
+
+            Ok(())
+        }
+
+        fn check_for_skewed_read(&mut self) -> Result<()> {
+            let read = ExtentReadRequest {
+                offset: BlockOffset(0),
+                data: BytesMut::with_capacity(512),
+            };
+
+            let resp = self.inner.read(self.job_id, read, IOV_MAX_TEST)?;
+            self.job_id.0 += 1;
+
+            let first_block_read = ExtentReadResponse {
+                blocks: vec![ReadBlockContext::Encrypted {
+                    ctx: self
+                        .first_context
+                        .encryption_context
+                        .as_ref()
+                        .unwrap()
+                        .clone(),
+                }],
+                data: Bytes::from(self.first_data.clone()).into(),
+            };
+
+            let second_block_read = ExtentReadResponse {
+                blocks: vec![ReadBlockContext::Encrypted {
+                    ctx: self
+                        .second_context
+                        .encryption_context
+                        .as_ref()
+                        .unwrap()
+                        .clone(),
+                }],
+                data: Bytes::from(self.second_data.clone()).into(),
+            };
+
+            if resp == first_block_read {
+                // ok
+            } else if resp == second_block_read {
+                // ok
+            } else {
+                // panic to leave the temporary directory behind for
+                // analysis
+                panic!("skewed block read! {resp:?}");
+            }
+
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<()> {
+            self.inner.flush(1, 1, self.job_id.into())?;
+            self.job_id.0 += 1;
+            Ok(())
+        }
+
+        fn defrag(&mut self) -> Result<()> {
+            self.inner.defragment()?;
+            Ok(())
+        }
+
+        fn crash(&mut self) -> Result<()> {
+            // Pretend the downstairs crashed
+
+            let log = crucible_common::build_logger();
+            self.inner = RawInner::open(
+                self.dir.as_ref(),
+                &new_region_definition(),
+                ExtentId(0),
+                false,
+                &log,
+            )?;
+
+            Ok(())
+        }
+
+        fn finish(&mut self) -> Result<()> {
+            // Any read should be valid - it should either be the first block +
+            // context or the second block + context
+
+            self.check_for_skewed_read()?;
+
+            self.second_write()?;
+            self.check_for_skewed_read()?;
+            self.inner.validate()?;
+
+            // Try the same read after flushing - importantly, if live repair
+            // occurs, the first thing that happens in the group of live repair
+            // jobs is a flush, and we don't want to flush a potentially bad
+            // combination of data and contexts.
+
+            self.flush()?;
+
+            self.inner.validate()?;
+            self.check_for_skewed_read()?;
+
+            // Try the same read after defragmenting (flush and defrag would
+            // happen in the same job normally, but this is extra assurance that
+            // if we crashed before defrag we wouldn't leave the on-disk state
+            // in a bad place).
+
+            self.defrag()?;
+            self.inner.validate()?;
+            self.check_for_skewed_read()?;
+
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_interrupted_context_write() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interrupted_context_write_with_crash() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.crash()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interrupted_data_write() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interrupted_data_write_with_crash() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.crash()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    // the downstair's default behaviour on an error (like EAGAIN?) is to send
+    // an error report to the upstairs and retry the write immediately. is it
+    // possible that it'll try the same write, and get interrupted at the same
+    // place?
+
+    #[test]
+    fn test_double_interrupted_context_write() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_double_interrupted_context_write_with_crash() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.crash()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_double_interrupted_data_write() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_double_interrupted_data_write_with_crash() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.crash()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    // what about being retrying and being interrupted at a different place?
+
+    #[test]
+    fn test_double_interrupt_different_places() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_double_interrupt_different_places_with_crash() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.crash()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_double_interrupt_different_places_then_finish() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.second_write()?;
+        test.finish()?;
+
+        Ok(())
+    }
+
+    // what about if the downstairs does not crash after the write being
+    // interrupted, then it retries, then it defrags?
+
+    #[test]
+    fn test_interrupted_context_write_and_defrag() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.second_write()?;
+        test.flush()?;
+        test.defrag()?;
+        test.check_for_skewed_read()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interrupted_data_write_and_defrag() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.second_write()?;
+        test.flush()?;
+        test.defrag()?;
+        test.check_for_skewed_read()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interrupted_context_write_and_defrag_with_crash() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_context_write()?;
+        test.crash()?;
+        test.second_write()?;
+        test.flush()?;
+        test.defrag()?;
+        test.check_for_skewed_read()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interrupted_data_write_and_defrag_with_crash() -> Result<()> {
+        let mut test = InterruptedWriteTest::new()?;
+
+        test.setup()?;
+        test.second_write_interrupt_after_data_write()?;
+        test.second_write()?;
+        test.crash()?;
+        test.flush()?;
+        test.defrag()?;
+        test.check_for_skewed_read()?;
+
+        Ok(())
     }
 }
